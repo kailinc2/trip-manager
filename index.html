@@ -172,6 +172,22 @@
   .map-link { color: var(--accent); text-decoration: none; }
   .map-link:active { text-decoration: underline; }
 
+  /* ---------- Per-day map ---------- */
+  .day-map { margin: 2px 2px 16px; }
+  .map-toggle {
+    display: block; width: 100%; text-align: left;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--accent); font-weight: 600; font-size: 13px; font-family: inherit;
+    cursor: pointer; padding: 10px 12px; border-radius: 10px;
+  }
+  .map-toggle:active { background: var(--accent-soft); }
+  .map-toggle[aria-expanded="true"] { border-radius: 10px 10px 0 0; }
+  .day-map-frame {
+    display: block; width: 100%; height: 280px; border: 0;
+    border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 10px 10px; background: var(--bg);
+  }
+
   /* ---------- Tabs (Itinerary | Budget) ---------- */
   .tabs {
     display: flex; gap: 2px;
@@ -561,6 +577,44 @@ function renderTrips() {
 
 const byStartTime = (a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99");
 
+// Ordered list of a day's stop locations, in time order, dropping blanks
+// and collapsing consecutive repeats (e.g. two things "Downtown Seattle").
+function dayLocations(acts) {
+  const locs = [];
+  for (const a of [...acts].sort(byStartTime)) {
+    const loc = (a.location || "").trim();
+    if (loc && loc !== locs[locs.length - 1]) locs.push(loc);
+  }
+  return locs;
+}
+
+// Keyless Google Maps embed for a day: a single place gets a search embed,
+// two or more become a route through the stops in order (saddr + "to:" chain).
+function mapEmbedSrc(locs) {
+  if (locs.length === 0) return null;
+  if (locs.length === 1) {
+    return "https://maps.google.com/maps?output=embed&q=" + encodeURIComponent(locs[0]);
+  }
+  const saddr = encodeURIComponent(locs[0]);
+  const daddr = locs.slice(1).map(encodeURIComponent).join("+to:");
+  return "https://maps.google.com/maps?output=embed&saddr=" + saddr + "&daddr=" + daddr;
+}
+
+// A collapsible map for one day. Returns "" when the day has no locations.
+// The iframe is injected lazily on tap (see the "toggle-map" handler) so an
+// all-days overview doesn't spin up a dozen maps at once.
+function mapSectionHTML(acts, key) {
+  const locs = dayLocations(acts);
+  const src = mapEmbedSrc(locs);
+  if (!src) return "";
+  const label = locs.length === 1 ? "Show place on map" : `Show ${locs.length} stops on map`;
+  return `
+  <div class="day-map" id="map-${esc(key)}">
+    <button class="map-toggle" data-action="toggle-map"
+      data-src="${esc(src)}" data-label="${esc(label)}" aria-expanded="false">🗺️ ${esc(label)}</button>
+  </div>`;
+}
+
 function activityCardHTML(trip, a) {
   const mapLink = a.location
     ? `<a class="map-link" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a.location)}"
@@ -592,6 +646,7 @@ function daySectionHTML(trip, d, i) {
     </div>
     ${acts.map(a => activityCardHTML(trip, a)).join("") || `<div class="day-empty">Nothing planned.</div>`}
     ${total ? `<div class="day-total">Day total: <b>${fmtMoney(total, trip.currency)}</b></div>` : ""}
+    ${mapSectionHTML(acts, d)}
   </section>`;
 }
 
@@ -600,6 +655,7 @@ function orphanSectionHTML(trip, orphans) {
   <section class="day-section" id="day-other">
     <div class="day-heading"><span>⚠️ Outside trip dates — edit to pick a day</span></div>
     ${[...orphans].sort(byStartTime).map(a => activityCardHTML(trip, a)).join("")}
+    ${mapSectionHTML(orphans, "other")}
   </section>`;
 }
 
@@ -671,6 +727,7 @@ function renderTrip() {
     }
     itinerary = `<div class="day-heading">${heading}</div>
       ${list}
+      ${mapSectionHTML(dayActs, state.selectedDate)}
       <button class="btn" data-action="add-activity">+ Add Activity</button>`;
   }
 
@@ -993,6 +1050,28 @@ document.addEventListener("click", e => {
       } else {
         state.selectedDate = d;
         render();
+      }
+      break;
+    }
+    case "toggle-map": {
+      // Inject/remove the map iframe in place — no re-render, so the page
+      // doesn't jump and the map stays put while you scroll the day.
+      const wrap = el.parentElement;
+      const open = wrap.querySelector("iframe");
+      if (open) {
+        open.remove();
+        el.setAttribute("aria-expanded", "false");
+        el.textContent = "🗺️ " + el.dataset.label;
+      } else {
+        const frame = document.createElement("iframe");
+        frame.className = "day-map-frame";
+        frame.loading = "lazy";
+        frame.referrerPolicy = "no-referrer-when-downgrade";
+        frame.setAttribute("allowfullscreen", "");
+        frame.src = el.dataset.src;
+        wrap.appendChild(frame);
+        el.setAttribute("aria-expanded", "true");
+        el.textContent = "🗺️ Hide map";
       }
       break;
     }
