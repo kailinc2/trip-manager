@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#2563eb">
+<title>Trip Manager</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --text: #1b1f24;
+    --text-dim: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --border: #e5e7eb;
+    --danger: #dc2626;
+    --shadow: 0 1px 3px rgba(0,0,0,.08);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101318;
+      --surface: #1a1f27;
+      --text: #e8eaed;
+      --text-dim: #9aa3af;
+      --accent: #60a5fa;
+      --accent-soft: #1e3a5f;
+      --border: #2a313c;
+      --danger: #f87171;
+      --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding-bottom: env(safe-area-inset-bottom);
+    min-height: 100vh;
+  }
+
+  /* ---------- Header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  header h1 {
+    font-size: 18px; font-weight: 700; margin: 0;
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .icon-btn {
+    background: none; border: none; color: var(--accent);
+    font-size: 16px; font-weight: 600; cursor: pointer;
+    padding: 6px 8px; border-radius: 8px; flex-shrink: 0;
+  }
+  .icon-btn:active { background: var(--accent-soft); }
+
+  main { padding: 16px; max-width: 640px; margin: 0 auto; }
+
+  /* ---------- Cards & lists ---------- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    cursor: pointer;
+  }
+  .card:active { opacity: .85; }
+  .card h2 { margin: 0 0 2px; font-size: 17px; }
+  .card .sub { color: var(--text-dim); font-size: 14px; margin: 0; }
+  .card .stats { display: flex; gap: 14px; margin-top: 8px; font-size: 13px; color: var(--text-dim); }
+
+  .empty {
+    text-align: center; color: var(--text-dim);
+    padding: 48px 24px; font-size: 15px; line-height: 1.6;
+  }
+  .empty .big { font-size: 44px; display: block; margin-bottom: 8px; }
+
+  .btn {
+    display: block; width: 100%;
+    background: var(--accent); color: #fff;
+    border: none; border-radius: var(--radius);
+    padding: 14px; font-size: 16px; font-weight: 600;
+    cursor: pointer; margin-top: 4px;
+  }
+  .btn:active { opacity: .85; }
+  .btn.secondary {
+    background: var(--surface); color: var(--accent);
+    border: 1px solid var(--border);
+  }
+  .btn.danger { background: none; color: var(--danger); border: none; font-weight: 500; }
+
+  /* ---------- Trip view ---------- */
+  .trip-sub {
+    color: var(--text-dim); font-size: 14px;
+    margin: -6px 0 14px; text-align: center;
+  }
+  .day-chips {
+    display: flex; gap: 8px; overflow-x: auto;
+    padding: 2px 2px 12px; margin: 0 -16px; padding-left: 16px; padding-right: 16px;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  .day-chips::-webkit-scrollbar { display: none; }
+  .chip {
+    flex-shrink: 0; text-align: center;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 8px 14px; cursor: pointer;
+    font-size: 13px; color: var(--text-dim); line-height: 1.3;
+  }
+  .chip b { display: block; font-size: 15px; color: var(--text); }
+  .chip.selected { background: var(--accent); border-color: var(--accent); }
+  .chip.selected b, .chip.selected { color: #fff; }
+
+  .day-heading {
+    font-size: 14px; font-weight: 600; color: var(--text-dim);
+    margin: 6px 2px 10px;
+  }
+
+  /* ---------- Activities ---------- */
+  .activity {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 12px 14px; margin-bottom: 10px; cursor: pointer;
+  }
+  .activity:active { opacity: .85; }
+  .act-time {
+    flex-shrink: 0; width: 62px;
+    font-size: 13px; font-weight: 600; color: var(--accent);
+    line-height: 1.4; padding-top: 2px;
+  }
+  .act-time .end { color: var(--text-dim); font-weight: 400; display: block; }
+  .act-main { flex: 1; min-width: 0; }
+  .act-title { font-size: 15px; font-weight: 600; margin: 0; }
+  .act-meta { font-size: 13px; color: var(--text-dim); margin-top: 3px; overflow-wrap: break-word; }
+  .act-notes { font-size: 13px; color: var(--text-dim); margin-top: 4px; white-space: pre-wrap; }
+  .act-cost { flex-shrink: 0; font-size: 14px; font-weight: 600; padding-top: 2px; }
+
+  .day-total {
+    text-align: right; font-size: 14px; color: var(--text-dim);
+    margin: 4px 4px 14px;
+  }
+  .day-total b { color: var(--text); }
+
+  /* ---------- Modal (bottom sheet) ---------- */
+  #modal {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(0,0,0,.45);
+    display: none; align-items: flex-end; justify-content: center;
+  }
+  #modal.open { display: flex; }
+  .sheet {
+    background: var(--surface);
+    border-radius: 20px 20px 0 0;
+    width: 100%; max-width: 640px;
+    max-height: 88vh; overflow-y: auto;
+    padding: 20px 20px calc(24px + env(safe-area-inset-bottom));
+    animation: slideUp .22s ease-out;
+  }
+  @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .sheet h3 { margin: 0 0 16px; font-size: 18px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 13px; font-weight: 600; color: var(--text-dim); margin-bottom: 5px; }
+  .field input, .field select, .field textarea {
+    width: 100%; padding: 11px 12px;
+    font-size: 16px; font-family: inherit;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    appearance: none; -webkit-appearance: none;
+  }
+  .field textarea { resize: vertical; min-height: 64px; }
+  .field-row { display: flex; gap: 10px; }
+  .field-row .field { flex: 1; min-width: 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <button class="icon-btn" id="back-btn" data-action="back" hidden>‹ Trips</button>
+  <h1 id="header-title">Trip Manager</h1>
+  <button class="icon-btn" id="header-action" hidden></button>
+</header>
+
+<main id="app"></main>
+
+<div id="modal"></div>
+<input type="file" id="import-file" accept=".json,application/json" hidden>
+
+<script>
+"use strict";
+
+/* ================= Data layer ================= */
+
+const STORE_KEY = "tripManager.v1";
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data && Array.isArray(data.trips)) return data;
+    }
+  } catch (e) { /* corrupted storage: start fresh */ }
+  return { trips: [] };
+}
+
+function save() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(db));
+}
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+const db = load();
+
+const CATEGORIES = [
+  ["food",        "🍽️", "Food & drink"],
+  ["sightseeing", "🏛️", "Sightseeing"],
+  ["transport",   "🚆", "Transport"],
+  ["lodging",     "🏨", "Lodging"],
+  ["activity",    "🎟️", "Activity"],
+  ["shopping",    "🛍️", "Shopping"],
+  ["other",       "📌", "Other"],
+];
+
+function categoryLabel(key) {
+  const c = CATEGORIES.find(c => c[0] === key) || CATEGORIES[CATEGORIES.length - 1];
+  return c[1] + " " + c[2];
+}
+
+/* ================= Helpers ================= */
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// Parse "YYYY-MM-DD" as a local date (avoids UTC off-by-one).
+function parseDate(s) {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function toISO(d) {
+  return d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" +
+    String(d.getDate()).padStart(2, "0");
+}
+
+function fmtDate(iso, opts) {
+  return parseDate(iso).toLocaleDateString(undefined, opts);
+}
+
+function fmtRange(a, b) {
+  const sameYear = a.slice(0, 4) === b.slice(0, 4);
+  const start = fmtDate(a, { month: "short", day: "numeric", year: sameYear ? undefined : "numeric" });
+  const end = fmtDate(b, { month: "short", day: "numeric", year: "numeric" });
+  return start + " – " + end;
+}
+
+function fmtTime(hhmm) {
+  if (!hhmm) return "";
+  const [h, m] = hhmm.split(":").map(Number);
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function fmtMoney(n, currency) {
+  return (currency || "$") + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+function getTrip(id) {
+  return db.trips.find(t => t.id === id);
+}
+
+// All dates in the trip's range, capped defensively at 120 days.
+function tripDays(trip) {
+  const days = [];
+  const d = parseDate(trip.startDate);
+  const end = parseDate(trip.endDate);
+  while (d <= end && days.length < 120) {
+    days.push(toISO(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return days;
+}
+
+function tripTotalCost(trip) {
+  return trip.activities.reduce((sum, a) => sum + (a.cost || 0), 0);
+}
+
+/* ================= Export / import ================= */
+
+function slugify(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "trip";
+}
+
+function exportTrip(trip) {
+  const data = { app: "trip-manager", version: 1, trip };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = slugify(trip.name) + ".json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Validate and normalize an imported trip. Throws with a readable
+// message on anything that doesn't look like a trip; silently drops
+// malformed activities and unknown fields.
+function sanitizeTrip(raw) {
+  if (!raw || typeof raw !== "object") throw new Error("this file doesn't contain a trip");
+  const isDate = s => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  const isTime = s => typeof s === "string" && /^([01]?\d|2[0-3]):[0-5]\d$/.test(s);
+  if (typeof raw.name !== "string" || !raw.name.trim()) throw new Error("the trip has no name");
+  if (!isDate(raw.startDate) || !isDate(raw.endDate)) throw new Error("the trip dates are missing or invalid");
+
+  const trip = {
+    id: typeof raw.id === "string" ? raw.id : uid(),
+    name: raw.name.trim().slice(0, 80),
+    destination: typeof raw.destination === "string" ? raw.destination.trim().slice(0, 80) : "",
+    startDate: raw.startDate,
+    endDate: raw.endDate,
+    currency: (typeof raw.currency === "string" && raw.currency.trim()) ? raw.currency.trim().slice(0, 5) : "$",
+    activities: [],
+  };
+  if (trip.endDate < trip.startDate) [trip.startDate, trip.endDate] = [trip.endDate, trip.startDate];
+
+  for (const a of Array.isArray(raw.activities) ? raw.activities : []) {
+    if (!a || typeof a !== "object") continue;
+    if (typeof a.title !== "string" || !a.title.trim() || !isDate(a.date)) continue;
+    trip.activities.push({
+      id: typeof a.id === "string" ? a.id : uid(),
+      title: a.title.trim().slice(0, 120),
+      date: a.date,
+      startTime: isTime(a.startTime) ? a.startTime : "",
+      endTime: isTime(a.endTime) ? a.endTime : "",
+      category: CATEGORIES.some(c => c[0] === a.category) ? a.category : "other",
+      location: typeof a.location === "string" ? a.location.trim().slice(0, 160) : "",
+      cost: (typeof a.cost === "number" && isFinite(a.cost) && a.cost >= 0) ? a.cost : null,
+      notes: typeof a.notes === "string" ? a.notes.trim().slice(0, 1000) : "",
+    });
+  }
+  return trip;
+}
+
+function importTripFromData(data) {
+  const trip = sanitizeTrip(data && data.trip ? data.trip : data);
+  const existingIdx = db.trips.findIndex(t => t.id === trip.id);
+  if (existingIdx >= 0) {
+    const replace = confirm(
+      `"${db.trips[existingIdx].name}" already exists here.\n\nOK = replace it with the imported version\nCancel = keep both (import as a copy)`);
+    if (replace) {
+      db.trips[existingIdx] = trip;
+    } else {
+      trip.id = uid();
+      trip.name = (trip.name + " (copy)").slice(0, 80);
+      db.trips.push(trip);
+    }
+  } else {
+    db.trips.push(trip);
+  }
+  state.view = "trip";
+  state.tripId = trip.id;
+  state.selectedDate = null;
+  save();
+  render();
+}
+
+/* ================= State & rendering ================= */
+
+const state = { view: "trips", tripId: null, selectedDate: null };
+
+const $app = document.getElementById("app");
+const $title = document.getElementById("header-title");
+const $back = document.getElementById("back-btn");
+const $headerAction = document.getElementById("header-action");
+
+function render() {
+  if (state.view === "trip" && getTrip(state.tripId)) renderTrip();
+  else renderTrips();
+  window.scrollTo(0, 0);
+}
+
+/* ----- Trips list ----- */
+
+function renderTrips() {
+  state.view = "trips";
+  $title.textContent = "Trip Manager";
+  $back.hidden = true;
+  $headerAction.hidden = true;
+
+  let html = "";
+  if (db.trips.length === 0) {
+    html += `<div class="empty"><span class="big">✈️</span>
+      No trips yet.<br>Create your first one to start planning.</div>`;
+  } else {
+    const sorted = [...db.trips].sort((a, b) => a.startDate.localeCompare(b.startDate));
+    for (const t of sorted) {
+      const total = tripTotalCost(t);
+      html += `
+      <div class="card" data-action="open-trip" data-id="${t.id}">
+        <h2>${esc(t.name)}</h2>
+        <p class="sub">${esc(t.destination)} · ${fmtRange(t.startDate, t.endDate)}</p>
+        <div class="stats">
+          <span>${tripDays(t).length} days</span>
+          <span>${t.activities.length} activities</span>
+          ${total ? `<span>${fmtMoney(total, t.currency)}</span>` : ""}
+        </div>
+      </div>`;
+    }
+  }
+  html += `<button class="btn" data-action="new-trip">+ New Trip</button>
+    <button class="btn secondary" data-action="import-trip">⤓ Import Trip</button>`;
+  $app.innerHTML = html;
+}
+
+/* ----- Single trip ----- */
+
+function renderTrip() {
+  const trip = getTrip(state.tripId);
+  state.view = "trip";
+  $title.textContent = trip.name;
+  $back.hidden = false;
+  $headerAction.hidden = false;
+  $headerAction.textContent = "Edit";
+  $headerAction.dataset.action = "edit-trip";
+  $headerAction.dataset.id = trip.id;
+
+  const days = tripDays(trip);
+  const orphans = trip.activities.filter(a => !days.includes(a.date));
+
+  // Default selected day: today if in range, else first day.
+  const today = toISO(new Date());
+  if (!days.includes(state.selectedDate) && state.selectedDate !== "other") {
+    state.selectedDate = days.includes(today) ? today : days[0];
+  }
+  if (state.selectedDate === "other" && orphans.length === 0) {
+    state.selectedDate = days[0];
+  }
+
+  let chips = "";
+  days.forEach((d, i) => {
+    const sel = d === state.selectedDate ? " selected" : "";
+    chips += `<div class="chip${sel}" data-action="select-day" data-date="${d}">
+      ${fmtDate(d, { weekday: "short" })}<b>${parseDate(d).getDate()}</b>Day ${i + 1}
+    </div>`;
+  });
+  if (orphans.length) {
+    const sel = state.selectedDate === "other" ? " selected" : "";
+    chips += `<div class="chip${sel}" data-action="select-day" data-date="other">⚠️<b>${orphans.length}</b>Other</div>`;
+  }
+
+  let dayActs, heading;
+  if (state.selectedDate === "other") {
+    dayActs = orphans;
+    heading = "Activities outside the trip dates — edit them to pick a day";
+  } else {
+    dayActs = trip.activities.filter(a => a.date === state.selectedDate);
+    heading = `${fmtDate(state.selectedDate, { weekday: "long", month: "long", day: "numeric" })} · Day ${days.indexOf(state.selectedDate) + 1} of ${days.length}`;
+  }
+  dayActs.sort((a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99"));
+
+  let list = "";
+  if (dayActs.length === 0) {
+    list = `<div class="empty"><span class="big">🗓️</span>Nothing planned for this day yet.</div>`;
+  } else {
+    for (const a of dayActs) {
+      const meta = [categoryLabel(a.category), a.location ? "📍 " + esc(a.location) : ""]
+        .filter(Boolean).join(" · ");
+      list += `
+      <div class="activity" data-action="edit-activity" data-id="${a.id}">
+        <div class="act-time">${a.startTime ? fmtTime(a.startTime) : "—"}
+          ${a.endTime ? `<span class="end">– ${fmtTime(a.endTime)}</span>` : ""}
+        </div>
+        <div class="act-main">
+          <p class="act-title">${esc(a.title)}</p>
+          <div class="act-meta">${meta}</div>
+          ${a.notes ? `<div class="act-notes">${esc(a.notes)}</div>` : ""}
+        </div>
+        ${a.cost ? `<div class="act-cost">${fmtMoney(a.cost, trip.currency)}</div>` : ""}
+      </div>`;
+    }
+    const dayTotal = dayActs.reduce((s, a) => s + (a.cost || 0), 0);
+    if (dayTotal) list += `<div class="day-total">Day total: <b>${fmtMoney(dayTotal, trip.currency)}</b></div>`;
+  }
+
+  $app.innerHTML = `
+    <p class="trip-sub">${esc(trip.destination)} · ${fmtRange(trip.startDate, trip.endDate)}</p>
+    <div class="day-chips">${chips}</div>
+    <div class="day-heading">${heading}</div>
+    ${list}
+    <button class="btn" data-action="add-activity">+ Add Activity</button>`;
+}
+
+/* ================= Modal forms ================= */
+
+const $modal = document.getElementById("modal");
+
+function openModal(html) {
+  $modal.innerHTML = `<div class="sheet">${html}</div>`;
+  $modal.classList.add("open");
+}
+
+function closeModal() {
+  $modal.classList.remove("open");
+  $modal.innerHTML = "";
+}
+
+function openTripForm(trip) {
+  const isNew = !trip;
+  const t = trip || { name: "", destination: "", startDate: "", endDate: "", currency: "$" };
+  openModal(`
+  <form id="trip-form" data-id="${t.id || ""}">
+    <h3>${isNew ? "New Trip" : "Edit Trip"}</h3>
+    <div class="field">
+      <label>Trip name</label>
+      <input name="name" required maxlength="80" placeholder="Summer in Japan" value="${esc(t.name)}">
+    </div>
+    <div class="field">
+      <label>Destination</label>
+      <input name="destination" required maxlength="80" placeholder="Tokyo, Kyoto" value="${esc(t.destination)}">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Start date</label>
+        <input name="startDate" type="date" required value="${esc(t.startDate)}">
+      </div>
+      <div class="field">
+        <label>End date</label>
+        <input name="endDate" type="date" required value="${esc(t.endDate)}">
+      </div>
+    </div>
+    <div class="field">
+      <label>Currency symbol</label>
+      <input name="currency" maxlength="5" placeholder="$" value="${esc(t.currency || "$")}">
+    </div>
+    <button class="btn" type="submit">${isNew ? "Create Trip" : "Save Changes"}</button>
+    ${isNew ? "" : `<button class="btn secondary" type="button" data-action="export-trip" data-id="${t.id}">⇪ Export as File</button>`}
+    <button class="btn secondary" type="button" data-action="close-modal">Cancel</button>
+    ${isNew ? "" : `<button class="btn danger" type="button" data-action="delete-trip" data-id="${t.id}">Delete Trip</button>`}
+  </form>`);
+}
+
+function openActivityForm(trip, activity) {
+  const isNew = !activity;
+  const defaultDate = state.selectedDate === "other" ? tripDays(trip)[0] : state.selectedDate;
+  const a = activity || { title: "", date: defaultDate, startTime: "", endTime: "", category: "activity", location: "", cost: "", notes: "" };
+
+  const days = tripDays(trip);
+  const dayOptions = days.map((d, i) =>
+    `<option value="${d}" ${d === a.date ? "selected" : ""}>Day ${i + 1} · ${fmtDate(d, { weekday: "short", month: "short", day: "numeric" })}</option>`
+  );
+  if (!days.includes(a.date)) {
+    dayOptions.unshift(`<option value="${esc(a.date)}" selected>⚠️ ${fmtDate(a.date, { month: "short", day: "numeric", year: "numeric" })} (outside trip)</option>`);
+  }
+
+  const catOptions = CATEGORIES.map(([key, icon, label]) =>
+    `<option value="${key}" ${key === a.category ? "selected" : ""}>${icon} ${label}</option>`
+  ).join("");
+
+  openModal(`
+  <form id="activity-form" data-id="${a.id || ""}">
+    <h3>${isNew ? "Add Activity" : "Edit Activity"}</h3>
+    <div class="field">
+      <label>What</label>
+      <input name="title" required maxlength="120" placeholder="Visit Senso-ji Temple" value="${esc(a.title)}">
+    </div>
+    <div class="field">
+      <label>Day</label>
+      <select name="date">${dayOptions.join("")}</select>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Start time</label>
+        <input name="startTime" type="time" value="${esc(a.startTime)}">
+      </div>
+      <div class="field">
+        <label>End time</label>
+        <input name="endTime" type="time" value="${esc(a.endTime)}">
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Category</label>
+        <select name="category">${catOptions}</select>
+      </div>
+      <div class="field">
+        <label>Cost (${esc(trip.currency || "$")})</label>
+        <input name="cost" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0" value="${a.cost || ""}">
+      </div>
+    </div>
+    <div class="field">
+      <label>Where</label>
+      <input name="location" maxlength="160" placeholder="Address or place name" value="${esc(a.location)}">
+    </div>
+    <div class="field">
+      <label>Notes</label>
+      <textarea name="notes" maxlength="1000" placeholder="Reservation #, tips…">${esc(a.notes)}</textarea>
+    </div>
+    <button class="btn" type="submit">${isNew ? "Add Activity" : "Save Changes"}</button>
+    <button class="btn secondary" type="button" data-action="close-modal">Cancel</button>
+    ${isNew ? "" : `<button class="btn danger" type="button" data-action="delete-activity" data-id="${a.id}">Delete Activity</button>`}
+  </form>`);
+}
+
+/* ================= Form submission ================= */
+
+document.addEventListener("submit", e => {
+  e.preventDefault();
+  const form = e.target;
+  const f = new FormData(form);
+
+  if (form.id === "trip-form") {
+    let startDate = f.get("startDate"), endDate = f.get("endDate");
+    if (endDate < startDate) [startDate, endDate] = [endDate, startDate];
+    const fields = {
+      name: f.get("name").trim(),
+      destination: f.get("destination").trim(),
+      startDate, endDate,
+      currency: (f.get("currency") || "").trim() || "$",
+    };
+    const existing = getTrip(form.dataset.id);
+    if (existing) {
+      Object.assign(existing, fields);
+    } else {
+      const trip = Object.assign({ id: uid(), activities: [] }, fields);
+      db.trips.push(trip);
+      state.tripId = trip.id;
+    }
+    state.view = "trip";
+    state.selectedDate = null;
+    save(); closeModal(); render();
+  }
+
+  if (form.id === "activity-form") {
+    const trip = getTrip(state.tripId);
+    if (!trip) return;
+    const cost = parseFloat(f.get("cost"));
+    const fields = {
+      title: f.get("title").trim(),
+      date: f.get("date"),
+      startTime: f.get("startTime"),
+      endTime: f.get("endTime"),
+      category: f.get("category"),
+      location: f.get("location").trim(),
+      cost: isNaN(cost) ? null : cost,
+      notes: f.get("notes").trim(),
+    };
+    const existing = trip.activities.find(a => a.id === form.dataset.id);
+    if (existing) Object.assign(existing, fields);
+    else trip.activities.push(Object.assign({ id: uid() }, fields));
+    if (tripDays(trip).includes(fields.date)) state.selectedDate = fields.date;
+    save(); closeModal(); render();
+  }
+});
+
+/* ================= Click handling ================= */
+
+document.addEventListener("click", e => {
+  // Tap on the modal backdrop closes it.
+  if (e.target === $modal) { closeModal(); return; }
+
+  const el = e.target.closest("[data-action]");
+  if (!el) return;
+  const trip = getTrip(state.tripId);
+
+  switch (el.dataset.action) {
+    case "new-trip":
+      openTripForm(null);
+      break;
+    case "open-trip":
+      state.view = "trip";
+      state.tripId = el.dataset.id;
+      state.selectedDate = null;
+      render();
+      break;
+    case "edit-trip":
+      openTripForm(getTrip(el.dataset.id));
+      break;
+    case "delete-trip": {
+      const t = getTrip(el.dataset.id);
+      if (t && confirm(`Delete "${t.name}" and all its activities?`)) {
+        db.trips = db.trips.filter(x => x.id !== t.id);
+        state.view = "trips";
+        save(); closeModal(); render();
+      }
+      break;
+    }
+    case "back":
+      state.view = "trips";
+      state.tripId = null;
+      render();
+      break;
+    case "select-day":
+      state.selectedDate = el.dataset.date;
+      render();
+      break;
+    case "add-activity":
+      if (trip) openActivityForm(trip, null);
+      break;
+    case "edit-activity":
+      if (trip) openActivityForm(trip, trip.activities.find(a => a.id === el.dataset.id));
+      break;
+    case "delete-activity": {
+      if (!trip) break;
+      const a = trip.activities.find(x => x.id === el.dataset.id);
+      if (a && confirm(`Delete "${a.title}"?`)) {
+        trip.activities = trip.activities.filter(x => x.id !== a.id);
+        save(); closeModal(); render();
+      }
+      break;
+    }
+    case "export-trip": {
+      const t = getTrip(el.dataset.id);
+      if (t) exportTrip(t);
+      break;
+    }
+    case "import-trip":
+      document.getElementById("import-file").click();
+      break;
+    case "close-modal":
+      closeModal();
+      break;
+  }
+});
+
+/* ================= Import file handling ================= */
+
+document.getElementById("import-file").addEventListener("change", async e => {
+  const file = e.target.files[0];
+  e.target.value = ""; // allow picking the same file again later
+  if (!file) return;
+  try {
+    importTripFromData(JSON.parse(await file.text()));
+  } catch (err) {
+    alert("Couldn't import: " + (err instanceof SyntaxError ? "this isn't a valid JSON file" : err.message));
+  }
+});
+
+render();
+</script>
+</body>
+</html>
