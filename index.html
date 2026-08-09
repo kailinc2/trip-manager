@@ -106,8 +106,10 @@
   }
   .day-chips {
     display: flex; gap: 8px; overflow-x: auto;
-    padding: 2px 2px 12px; margin: 0 -16px; padding-left: 16px; padding-right: 16px;
+    padding: 8px 16px 12px; margin: 0 -16px;
     -webkit-overflow-scrolling: touch; scrollbar-width: none;
+    position: sticky; top: calc(52px + env(safe-area-inset-top)); z-index: 5;
+    background: var(--bg);
   }
   .day-chips::-webkit-scrollbar { display: none; }
   .chip {
@@ -123,7 +125,15 @@
   .day-heading {
     font-size: 14px; font-weight: 600; color: var(--text-dim);
     margin: 6px 2px 10px;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
   }
+  .day-section { scroll-margin-top: calc(144px + env(safe-area-inset-top)); margin-bottom: 18px; }
+  .mini-add {
+    border: none; background: none; color: var(--accent);
+    font-weight: 600; font-size: 13px; font-family: inherit;
+    cursor: pointer; padding: 2px 4px; flex-shrink: 0;
+  }
+  .day-empty { color: var(--text-dim); font-size: 14px; margin: 0 2px 10px; }
 
   /* ---------- Activities ---------- */
   .activity {
@@ -475,6 +485,55 @@ function renderTrips() {
 
 /* ----- Single trip ----- */
 
+const byStartTime = (a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99");
+
+function activityCardHTML(trip, a) {
+  const mapLink = a.location
+    ? `<a class="map-link" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a.location)}"
+         target="_blank" rel="noopener">📍 ${esc(a.location)}</a>`
+    : "";
+  const meta = [categoryLabel(a.category), mapLink].filter(Boolean).join(" · ");
+  return `
+  <div class="activity" data-action="edit-activity" data-id="${a.id}">
+    <div class="act-time">${a.startTime ? fmtTime(a.startTime) : "—"}
+      ${a.endTime ? `<span class="end">– ${fmtTime(a.endTime)}</span>` : ""}
+    </div>
+    <div class="act-main">
+      <p class="act-title">${esc(a.title)}</p>
+      <div class="act-meta">${meta}</div>
+      ${a.notes ? `<div class="act-notes">${esc(a.notes)}</div>` : ""}
+    </div>
+    ${a.cost ? `<div class="act-cost">${fmtMoney(a.cost, trip.currency)}</div>` : ""}
+  </div>`;
+}
+
+function daySectionHTML(trip, d, i) {
+  const acts = trip.activities.filter(a => a.date === d).sort(byStartTime);
+  const total = acts.reduce((s, a) => s + (a.cost || 0), 0);
+  return `
+  <section class="day-section" id="day-${d}">
+    <div class="day-heading">
+      <span>${fmtDate(d, { weekday: "long", month: "long", day: "numeric" })} · Day ${i + 1}</span>
+      <button class="mini-add" data-action="add-activity" data-date="${d}">+ Add</button>
+    </div>
+    ${acts.map(a => activityCardHTML(trip, a)).join("") || `<div class="day-empty">Nothing planned.</div>`}
+    ${total ? `<div class="day-total">Day total: <b>${fmtMoney(total, trip.currency)}</b></div>` : ""}
+  </section>`;
+}
+
+function orphanSectionHTML(trip, orphans) {
+  return `
+  <section class="day-section" id="day-other">
+    <div class="day-heading"><span>⚠️ Outside trip dates — edit to pick a day</span></div>
+    ${[...orphans].sort(byStartTime).map(a => activityCardHTML(trip, a)).join("")}
+  </section>`;
+}
+
+function scrollToDay(date, smooth) {
+  const sec = document.getElementById("day-" + date) || document.getElementById("day-other");
+  if (sec) sec.scrollIntoView({ behavior: smooth ? "smooth" : "auto", block: "start" });
+}
+
 function renderTrip() {
   const trip = getTrip(state.tripId);
   state.view = "trip";
@@ -490,14 +549,15 @@ function renderTrip() {
 
   // Default selected day: today if in range, else first day.
   const today = toISO(new Date());
-  if (!days.includes(state.selectedDate) && state.selectedDate !== "other") {
+  if (!days.includes(state.selectedDate) && state.selectedDate !== "other" && state.selectedDate !== "all") {
     state.selectedDate = days.includes(today) ? today : days[0];
   }
   if (state.selectedDate === "other" && orphans.length === 0) {
     state.selectedDate = days[0];
   }
 
-  let chips = "";
+  let chips = `<div class="chip${state.selectedDate === "all" ? " selected" : ""}"
+    data-action="select-day" data-date="all">☰<b>All</b>${days.length} days</div>`;
   days.forEach((d, i) => {
     const sel = d === state.selectedDate ? " selected" : "";
     chips += `<div class="chip${sel}" data-action="select-day" data-date="${d}">
@@ -509,41 +569,35 @@ function renderTrip() {
     chips += `<div class="chip${sel}" data-action="select-day" data-date="other">⚠️<b>${orphans.length}</b>Other</div>`;
   }
 
-  let dayActs, heading;
-  if (state.selectedDate === "other") {
-    dayActs = orphans;
-    heading = "Activities outside the trip dates — edit them to pick a day";
+  let itinerary;
+  if (state.selectedDate === "all") {
+    // Overview: every day in sequence; chips act as jump-links.
+    itinerary =
+      days.map((d, i) => daySectionHTML(trip, d, i)).join("") +
+      (orphans.length ? orphanSectionHTML(trip, orphans) : "") +
+      `<button class="btn" data-action="add-activity">+ Add Activity</button>`;
   } else {
-    dayActs = trip.activities.filter(a => a.date === state.selectedDate);
-    heading = `${fmtDate(state.selectedDate, { weekday: "long", month: "long", day: "numeric" })} · Day ${days.indexOf(state.selectedDate) + 1} of ${days.length}`;
-  }
-  dayActs.sort((a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99"));
-
-  let list = "";
-  if (dayActs.length === 0) {
-    list = `<div class="empty"><span class="big">🗓️</span>Nothing planned for this day yet.</div>`;
-  } else {
-    for (const a of dayActs) {
-      const mapLink = a.location
-        ? `<a class="map-link" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a.location)}"
-             target="_blank" rel="noopener">📍 ${esc(a.location)}</a>`
-        : "";
-      const meta = [categoryLabel(a.category), mapLink].filter(Boolean).join(" · ");
-      list += `
-      <div class="activity" data-action="edit-activity" data-id="${a.id}">
-        <div class="act-time">${a.startTime ? fmtTime(a.startTime) : "—"}
-          ${a.endTime ? `<span class="end">– ${fmtTime(a.endTime)}</span>` : ""}
-        </div>
-        <div class="act-main">
-          <p class="act-title">${esc(a.title)}</p>
-          <div class="act-meta">${meta}</div>
-          ${a.notes ? `<div class="act-notes">${esc(a.notes)}</div>` : ""}
-        </div>
-        ${a.cost ? `<div class="act-cost">${fmtMoney(a.cost, trip.currency)}</div>` : ""}
-      </div>`;
+    let dayActs, heading;
+    if (state.selectedDate === "other") {
+      dayActs = orphans;
+      heading = "Activities outside the trip dates — edit them to pick a day";
+    } else {
+      dayActs = trip.activities.filter(a => a.date === state.selectedDate);
+      heading = `${fmtDate(state.selectedDate, { weekday: "long", month: "long", day: "numeric" })} · Day ${days.indexOf(state.selectedDate) + 1} of ${days.length}`;
     }
-    const dayTotal = dayActs.reduce((s, a) => s + (a.cost || 0), 0);
-    if (dayTotal) list += `<div class="day-total">Day total: <b>${fmtMoney(dayTotal, trip.currency)}</b></div>`;
+    dayActs.sort(byStartTime);
+
+    let list = "";
+    if (dayActs.length === 0) {
+      list = `<div class="empty"><span class="big">🗓️</span>Nothing planned for this day yet.</div>`;
+    } else {
+      list = dayActs.map(a => activityCardHTML(trip, a)).join("");
+      const dayTotal = dayActs.reduce((s, a) => s + (a.cost || 0), 0);
+      if (dayTotal) list += `<div class="day-total">Day total: <b>${fmtMoney(dayTotal, trip.currency)}</b></div>`;
+    }
+    itinerary = `<div class="day-heading">${heading}</div>
+      ${list}
+      <button class="btn" data-action="add-activity">+ Add Activity</button>`;
   }
 
   const tabs = `
@@ -554,10 +608,7 @@ function renderTrip() {
 
   const content = state.tab === "budget"
     ? renderBudgetHTML(trip)
-    : `<div class="day-chips">${chips}</div>
-       <div class="day-heading">${heading}</div>
-       ${list}
-       <button class="btn" data-action="add-activity">+ Add Activity</button>`;
+    : `<div class="day-chips">${chips}</div>${itinerary}`;
 
   $app.innerHTML = `
     <p class="trip-sub">${esc(trip.destination)} · ${fmtRange(trip.startDate, trip.endDate)}</p>
@@ -696,12 +747,11 @@ function openTripForm(trip) {
   </form>`);
 }
 
-function openActivityForm(trip, activity) {
+function openActivityForm(trip, activity, defaultDate) {
   const isNew = !activity;
-  const defaultDate = state.selectedDate === "other" ? tripDays(trip)[0] : state.selectedDate;
-  const a = activity || { title: "", date: defaultDate, startTime: "", endTime: "", category: "activity", location: "", cost: "", notes: "" };
-
   const days = tripDays(trip);
+  const fallback = days.includes(state.selectedDate) ? state.selectedDate : days[0];
+  const a = activity || { title: "", date: defaultDate || fallback, startTime: "", endTime: "", category: "activity", location: "", cost: "", notes: "" };
   const dayOptions = days.map((d, i) =>
     `<option value="${d}" ${d === a.date ? "selected" : ""}>Day ${i + 1} · ${fmtDate(d, { weekday: "short", month: "short", day: "numeric" })}</option>`
   );
@@ -785,7 +835,7 @@ document.addEventListener("submit", e => {
       state.tripId = trip.id;
     }
     state.view = "trip";
-    state.selectedDate = null;
+    if (state.selectedDate !== "all") state.selectedDate = null;
     save(); closeModal(); render();
   }
 
@@ -806,8 +856,9 @@ document.addEventListener("submit", e => {
     const existing = trip.activities.find(a => a.id === form.dataset.id);
     if (existing) Object.assign(existing, fields);
     else trip.activities.push(Object.assign({ id: uid() }, fields));
-    if (tripDays(trip).includes(fields.date)) state.selectedDate = fields.date;
+    if (state.selectedDate !== "all" && tripDays(trip).includes(fields.date)) state.selectedDate = fields.date;
     save(); closeModal(); render();
+    if (state.selectedDate === "all") scrollToDay(fields.date);
   }
 });
 
@@ -857,12 +908,21 @@ document.addEventListener("click", e => {
       state.tripId = null;
       render();
       break;
-    case "select-day":
-      state.selectedDate = el.dataset.date;
-      render();
+    case "select-day": {
+      const d = el.dataset.date;
+      if (state.selectedDate === "all" && d !== "all") {
+        scrollToDay(d, true); // in overview, day chips jump-scroll
+      } else if (d === "all" && state.selectedDate === "all") {
+        state.selectedDate = null; // tap All again to go back to one day
+        render();
+      } else {
+        state.selectedDate = d;
+        render();
+      }
       break;
+    }
     case "add-activity":
-      if (trip) openActivityForm(trip, null);
+      if (trip) openActivityForm(trip, null, el.dataset.date);
       break;
     case "edit-activity":
       if (trip) openActivityForm(trip, trip.activities.find(a => a.id === el.dataset.id));
@@ -873,6 +933,7 @@ document.addEventListener("click", e => {
       if (a && confirm(`Delete "${a.title}"?`)) {
         trip.activities = trip.activities.filter(x => x.id !== a.id);
         save(); closeModal(); render();
+        if (state.selectedDate === "all") scrollToDay(a.date);
       }
       break;
     }
