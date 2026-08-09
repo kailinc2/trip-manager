@@ -418,6 +418,74 @@ function sanitizeTrip(raw) {
   return trip;
 }
 
+/* ---- Share by link: trip JSON, deflated, base64url, in the URL hash.
+   The hash is never sent to the server, so shared trips stay private. ---- */
+
+function b64url(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function unb64url(s) {
+  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+// "z:" = deflate-compressed, "j:" = plain JSON (fallback for old browsers).
+async function encodeShare(str) {
+  const bytes = new TextEncoder().encode(str);
+  if (typeof CompressionStream === "undefined") return "j:" + b64url(bytes);
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return "z:" + b64url(new Uint8Array(await new Response(stream).arrayBuffer()));
+}
+
+async function decodeShare(payload) {
+  const kind = payload.slice(0, 2), bytes = unb64url(payload.slice(2));
+  if (kind === "j:") return new TextDecoder().decode(bytes);
+  if (kind === "z:") {
+    if (typeof DecompressionStream === "undefined")
+      throw new Error("this browser can't open compressed trip links — ask for the file export instead");
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Response(stream).text();
+  }
+  throw new Error("unrecognized link format");
+}
+
+async function shareTrip(trip) {
+  const payload = await encodeShare(JSON.stringify({ app: "trip-manager", version: 1, trip }));
+  const url = location.origin + location.pathname + "#trip=" + payload;
+  if (navigator.share) {
+    try { await navigator.share({ title: trip.name, url }); return; }
+    catch (e) { if (e.name === "AbortError") return; /* else fall through to clipboard */ }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    alert("Share link copied to clipboard.");
+  } catch (e) {
+    prompt("Copy this link:", url);
+  }
+}
+
+async function handleSharedLink() {
+  const m = location.hash.match(/^#trip=(.+)$/);
+  if (!m) return;
+  // Clear the hash first so refresh/back doesn't re-prompt.
+  history.replaceState(null, "", location.pathname + location.search);
+  try {
+    const data = JSON.parse(await decodeShare(decodeURIComponent(m[1])));
+    const trip = sanitizeTrip(data && data.trip ? data.trip : data);
+    if (confirm(`Import shared trip "${trip.name}" (${trip.activities.length} activities)?`)) {
+      importTripFromData(trip);
+    }
+  } catch (err) {
+    alert("Couldn't open shared trip link: " + err.message);
+  }
+}
+
 function importTripFromData(data) {
   const trip = sanitizeTrip(data && data.trip ? data.trip : data);
   const existingIdx = db.trips.findIndex(t => t.id === trip.id);
@@ -747,7 +815,8 @@ function openTripForm(trip) {
       </div>
     </div>
     <button class="btn" type="submit">${isNew ? "Create Trip" : "Save Changes"}</button>
-    ${isNew ? "" : `<button class="btn secondary" type="button" data-action="export-trip" data-id="${t.id}">⇪ Export as File</button>`}
+    ${isNew ? "" : `<button class="btn secondary" type="button" data-action="share-trip" data-id="${t.id}">🔗 Share Link</button>
+    <button class="btn secondary" type="button" data-action="export-trip" data-id="${t.id}">⇪ Export as File</button>`}
     <button class="btn secondary" type="button" data-action="close-modal">Cancel</button>
     ${isNew ? "" : `<button class="btn danger" type="button" data-action="delete-trip" data-id="${t.id}">Delete Trip</button>`}
   </form>`);
@@ -948,6 +1017,11 @@ document.addEventListener("click", e => {
       if (t) exportTrip(t);
       break;
     }
+    case "share-trip": {
+      const t = getTrip(el.dataset.id);
+      if (t) shareTrip(t);
+      break;
+    }
     case "import-trip":
       document.getElementById("import-file").click();
       break;
@@ -971,6 +1045,7 @@ document.getElementById("import-file").addEventListener("change", async e => {
 });
 
 render();
+handleSharedLink();
 
 /* ================= PWA ================= */
 
