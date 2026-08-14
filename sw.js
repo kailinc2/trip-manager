@@ -1,6 +1,6 @@
 // Service worker: app shell cached for offline use.
 // Bump the cache version when shipping changes to any cached asset.
-const CACHE = "trip-manager-v9";
+const CACHE = "trip-manager-v10";
 const ASSETS = [
   "./",
   "./index.html",

@@ -156,9 +156,7 @@
     cursor: pointer; align-self: center;
     display: flex; align-items: center; justify-content: center;
   }
-  .swap-row { display: flex; justify-content: space-between; align-items: center; font-weight: 500; }
-  .swap-count { color: var(--text-dim); font-size: 13px; font-weight: 400; }
-  .swap-hint { color: var(--text-dim); font-size: 14px; margin: -8px 0 14px; }
+  .chip { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 
   /* ---------- Hold-to-drag reordering ---------- */
   .activity { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
@@ -613,12 +611,19 @@ const byStartTime = (a, b) => (a.startTime || "99:99").localeCompare(b.startTime
 const ord = a => (Number.isFinite(a.order) ? a.order : 1e9);
 const byDayOrder = (a, b) => (ord(a) - ord(b)) || byStartTime(a, b);
 
-// Exchange the full plans of two days. Per-day manual orders travel with
-// their activities, so each day keeps its internal sequence.
-function swapDays(trip, d1, d2) {
+// Rearrange whole days: newDateOrder is the trip's dates in the user's
+// arranged sequence; the plan that was on newDateOrder[k] moves to the
+// k-th chronological date. Per-day manual orders travel with their
+// activities, so each day keeps its internal sequence.
+function reorderDays(trip, newDateOrder) {
+  const days = tripDays(trip);
+  const dest = new Map();
+  newDateOrder.forEach((oldDate, k) => {
+    if (oldDate !== days[k]) dest.set(oldDate, days[k]);
+  });
+  if (!dest.size) return;
   for (const a of trip.activities) {
-    if (a.date === d1) a.date = d2;
-    else if (a.date === d2) a.date = d1;
+    if (dest.has(a.date)) a.date = dest.get(a.date);
   }
   save();
 }
@@ -721,7 +726,6 @@ function daySectionHTML(trip, d, i) {
     <div class="day-heading">
       <span>${fmtDate(d, { weekday: "long", month: "long", day: "numeric" })} · Day ${i + 1}</span>
       <span class="day-actions">
-        ${reordering ? `<button class="mini-add" data-action="swap-day" data-date="${d}">⇅ Swap</button>` : ""}
         ${acts.length ? `<button class="mini-add" data-action="toggle-reorder" data-date="${d}">${reordering ? "✓ Done" : "✎ Edit"}</button>` : ""}
         <button class="mini-add" data-action="add-activity" data-date="${d}">+ Add</button>
       </span>
@@ -814,7 +818,6 @@ function renderTrip() {
     }
     itinerary = `<div class="day-heading"><span>${heading}</span>
         <span class="day-actions">
-          ${reordering ? `<button class="mini-add" data-action="swap-day" data-date="${state.selectedDate}">⇅ Swap</button>` : ""}
           ${isRealDay && dayActs.length ? `<button class="mini-add" data-action="toggle-reorder" data-date="${state.selectedDate}">${reordering ? "✓ Done" : "✎ Edit"}</button>` : ""}
         </span>
       </div>
@@ -971,25 +974,6 @@ function openTripForm(trip) {
   </form>`);
 }
 
-function openSwapDaySheet(trip, fromDate) {
-  const days = tripDays(trip);
-  const counts = {};
-  trip.activities.forEach(a => { counts[a.date] = (counts[a.date] || 0) + 1; });
-  const rows = days.filter(d => d !== fromDate).map(d => {
-    const n = counts[d] || 0;
-    return `<button class="btn secondary swap-row" data-action="do-swap-day"
-      data-from="${fromDate}" data-to="${d}">
-      <span>Day ${days.indexOf(d) + 1} · ${fmtDate(d, { weekday: "short", month: "short", day: "numeric" })}</span>
-      <span class="swap-count">${n === 0 ? "empty" : n === 1 ? "1 activity" : n + " activities"}</span>
-    </button>`;
-  }).join("");
-  openModal(`
-    <h3>Swap ${fmtDate(fromDate, { weekday: "long", month: "long", day: "numeric" })} with…</h3>
-    <p class="swap-hint">The two days trade their full plans.</p>
-    ${rows}
-    <button class="btn secondary" type="button" data-action="close-modal">Cancel</button>`);
-}
-
 function openActivityForm(trip, activity, defaultDate) {
   const isNew = !activity;
   const days = tripDays(trip);
@@ -1122,7 +1106,7 @@ const drag = {
 let suppressClick = false;
 
 function blockScrollWhileDragging(e) {
-  if (drag.active) e.preventDefault();
+  if (drag.active || chipDrag.active) e.preventDefault();
 }
 
 function cancelHold() {
@@ -1209,9 +1193,123 @@ function endDrag() {
   window.scrollTo(0, y);
 }
 
+/* --- Day-chip drag: hold a day chip, drag left/right to move that
+   day's whole plan to a new slot; the days in between shift over. --- */
+
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const chipDrag = {
+  timer: null, active: false,
+  el: null, row: null, ghost: null,
+  startX: 0, startY: 0, liftX: 0, clientX: 0,
+};
+
+function cancelChipHold() {
+  clearTimeout(chipDrag.timer);
+  chipDrag.timer = null;
+  chipDrag.el = null;
+  chipDrag.row = null;
+}
+
+function startChipDrag() {
+  chipDrag.timer = null;
+  if (!chipDrag.el) return;
+  chipDrag.active = true;
+  chipDrag.liftX = chipDrag.clientX;
+  const rect = chipDrag.el.getBoundingClientRect();
+  const ghost = chipDrag.el.cloneNode(true);
+  ghost.classList.add("drag-ghost");
+  ghost.style.width = rect.width + "px";
+  ghost.style.left = rect.left + "px";
+  ghost.style.top = rect.top + "px";
+  document.body.appendChild(ghost);
+  chipDrag.ghost = ghost;
+  chipDrag.el.classList.add("drag-src");
+  document.addEventListener("touchmove", blockScrollWhileDragging, { passive: false });
+  if (navigator.vibrate) navigator.vibrate(10);
+  requestAnimationFrame(chipAutoScrollLoop);
+}
+
+// Only real date chips are valid slots — the dragged chip can never land
+// before "All" or after "Other".
+function updateChipInsertion() {
+  const x = chipDrag.clientX;
+  const dateChips = [...chipDrag.row.children]
+    .filter(c => c !== chipDrag.el && ISO_DAY.test(c.dataset.date || ""));
+  if (!dateChips.length) return;
+  let before = null;
+  for (const c of dateChips) {
+    const r = c.getBoundingClientRect();
+    if (x < r.left + r.width / 2) { before = c; break; }
+  }
+  if (before) {
+    if (before.previousElementSibling !== chipDrag.el) chipDrag.row.insertBefore(chipDrag.el, before);
+  } else {
+    const last = dateChips[dateChips.length - 1];
+    if (chipDrag.el.previousElementSibling !== last) chipDrag.row.insertBefore(chipDrag.el, last.nextSibling);
+  }
+}
+
+// Nudge the chip row sideways when dragging near its edges.
+function chipAutoScrollLoop() {
+  if (!chipDrag.active) return;
+  const r = chipDrag.row.getBoundingClientRect();
+  const x = chipDrag.clientX, m = 60;
+  if (x < r.left + m) chipDrag.row.scrollLeft -= Math.min(20, (r.left + m - x) / 3);
+  else if (x > r.right - m) chipDrag.row.scrollLeft += Math.min(20, (x - (r.right - m)) / 3);
+  updateChipInsertion();
+  requestAnimationFrame(chipAutoScrollLoop);
+}
+
+function endChipDrag() {
+  if (chipDrag.timer) { cancelChipHold(); return; }
+  if (!chipDrag.active) return;
+  chipDrag.active = false;
+  document.removeEventListener("touchmove", blockScrollWhileDragging);
+  chipDrag.ghost.remove();
+  chipDrag.ghost = null;
+  chipDrag.el.classList.remove("drag-src");
+
+  const trip = getTrip(state.tripId);
+  if (trip) {
+    const order = [...chipDrag.row.querySelectorAll(".chip")]
+      .map(c => c.dataset.date)
+      .filter(d => ISO_DAY.test(d || ""));
+    const landed = tripDays(trip)[order.indexOf(chipDrag.el.dataset.date)];
+    reorderDays(trip, order);
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 350);
+    // Show where the dragged plan ended up.
+    if (state.selectedDate === "all") {
+      const y = window.scrollY;
+      render();
+      window.scrollTo(0, y);
+      scrollToDay(landed, true);
+    } else {
+      state.selectedDate = landed;
+      render();
+    }
+  }
+  chipDrag.el = null;
+  chipDrag.row = null;
+}
+
+/* --- shared pointer wiring for both drags --- */
+
 $app.addEventListener("pointerdown", e => {
   if (e.button !== 0) return;
   if (e.target.closest("a,button")) return; // links/buttons keep their own gestures
+
+  const chip = e.target.closest(".chip");
+  if (chip && ISO_DAY.test(chip.dataset.date || "") && chip.parentElement.classList.contains("day-chips")) {
+    chipDrag.el = chip;
+    chipDrag.row = chip.parentElement;
+    chipDrag.startX = e.clientX;
+    chipDrag.startY = e.clientY;
+    chipDrag.clientX = e.clientX;
+    chipDrag.timer = setTimeout(startChipDrag, 250);
+    return;
+  }
+
   const card = e.target.closest(".activity");
   const wrap = card && card.parentElement;
   if (!card || !wrap || !wrap.classList.contains("day-cards")) return;
@@ -1225,6 +1323,8 @@ $app.addEventListener("pointerdown", e => {
 
 document.addEventListener("pointermove", e => {
   drag.clientY = e.clientY;
+  chipDrag.clientX = e.clientX;
+
   if (drag.timer && !drag.active) {
     // finger wandered before the hold fired: it's a scroll, not a drag
     if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 8) cancelHold();
@@ -1232,12 +1332,19 @@ document.addEventListener("pointermove", e => {
     drag.ghost.style.transform = `translateY(${e.clientY - drag.liftY}px) scale(1.02)`;
     updateInsertion();
   }
+
+  if (chipDrag.timer && !chipDrag.active) {
+    if (Math.hypot(e.clientX - chipDrag.startX, e.clientY - chipDrag.startY) > 8) cancelChipHold();
+  } else if (chipDrag.active) {
+    chipDrag.ghost.style.transform = `translateX(${e.clientX - chipDrag.liftX}px) scale(1.05)`;
+    updateChipInsertion();
+  }
 });
 
-document.addEventListener("pointerup", endDrag);
-document.addEventListener("pointercancel", endDrag);
+document.addEventListener("pointerup", () => { endDrag(); endChipDrag(); });
+document.addEventListener("pointercancel", () => { endDrag(); endChipDrag(); });
 $app.addEventListener("contextmenu", e => {
-  if (drag.active || drag.timer) e.preventDefault();
+  if (drag.active || drag.timer || chipDrag.active || chipDrag.timer) e.preventDefault();
 });
 
 /* ================= Click handling ================= */
@@ -1329,18 +1436,6 @@ document.addEventListener("click", e => {
     case "add-activity":
       if (trip) openActivityForm(trip, null, el.dataset.date);
       break;
-    case "swap-day":
-      if (trip) openSwapDaySheet(trip, el.dataset.date);
-      break;
-    case "do-swap-day": {
-      if (!trip) break;
-      swapDays(trip, el.dataset.from, el.dataset.to);
-      closeModal();
-      const y = window.scrollY;
-      render();
-      window.scrollTo(0, y);
-      break;
-    }
     case "toggle-reorder": {
       state.reorderDate = state.reorderDate === el.dataset.date ? null : el.dataset.date;
       const y = window.scrollY;
