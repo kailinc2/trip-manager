@@ -156,6 +156,9 @@
     cursor: pointer; align-self: center;
     display: flex; align-items: center; justify-content: center;
   }
+  .swap-row { display: flex; justify-content: space-between; align-items: center; font-weight: 500; }
+  .swap-count { color: var(--text-dim); font-size: 13px; font-weight: 400; }
+  .swap-hint { color: var(--text-dim); font-size: 14px; margin: -8px 0 14px; }
 
   /* ---------- Hold-to-drag reordering ---------- */
   .activity { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
@@ -610,6 +613,16 @@ const byStartTime = (a, b) => (a.startTime || "99:99").localeCompare(b.startTime
 const ord = a => (Number.isFinite(a.order) ? a.order : 1e9);
 const byDayOrder = (a, b) => (ord(a) - ord(b)) || byStartTime(a, b);
 
+// Exchange the full plans of two days. Per-day manual orders travel with
+// their activities, so each day keeps its internal sequence.
+function swapDays(trip, d1, d2) {
+  for (const a of trip.activities) {
+    if (a.date === d1) a.date = d2;
+    else if (a.date === d2) a.date = d1;
+  }
+  save();
+}
+
 function moveActivity(trip, id, dir) {
   const act = trip.activities.find(a => a.id === id);
   if (!act) return;
@@ -708,6 +721,7 @@ function daySectionHTML(trip, d, i) {
     <div class="day-heading">
       <span>${fmtDate(d, { weekday: "long", month: "long", day: "numeric" })} · Day ${i + 1}</span>
       <span class="day-actions">
+        ${reordering ? `<button class="mini-add" data-action="swap-day" data-date="${d}">⇅ Swap</button>` : ""}
         ${acts.length ? `<button class="mini-add" data-action="toggle-reorder" data-date="${d}">${reordering ? "✓ Done" : "✎ Edit"}</button>` : ""}
         <button class="mini-add" data-action="add-activity" data-date="${d}">+ Add</button>
       </span>
@@ -799,7 +813,10 @@ function renderTrip() {
       if (dayTotal) list += `<div class="day-total">Day total: <b>${fmtMoney(dayTotal, trip.currency)}</b></div>`;
     }
     itinerary = `<div class="day-heading"><span>${heading}</span>
-        ${isRealDay && dayActs.length ? `<button class="mini-add" data-action="toggle-reorder" data-date="${state.selectedDate}">${reordering ? "✓ Done" : "✎ Edit"}</button>` : ""}
+        <span class="day-actions">
+          ${reordering ? `<button class="mini-add" data-action="swap-day" data-date="${state.selectedDate}">⇅ Swap</button>` : ""}
+          ${isRealDay && dayActs.length ? `<button class="mini-add" data-action="toggle-reorder" data-date="${state.selectedDate}">${reordering ? "✓ Done" : "✎ Edit"}</button>` : ""}
+        </span>
       </div>
       ${list}
       ${mapSectionHTML(dayActs, state.selectedDate)}
@@ -952,6 +969,25 @@ function openTripForm(trip) {
     <button class="btn secondary" type="button" data-action="close-modal">Cancel</button>
     ${isNew ? "" : `<button class="btn danger" type="button" data-action="delete-trip" data-id="${t.id}">Delete Trip</button>`}
   </form>`);
+}
+
+function openSwapDaySheet(trip, fromDate) {
+  const days = tripDays(trip);
+  const counts = {};
+  trip.activities.forEach(a => { counts[a.date] = (counts[a.date] || 0) + 1; });
+  const rows = days.filter(d => d !== fromDate).map(d => {
+    const n = counts[d] || 0;
+    return `<button class="btn secondary swap-row" data-action="do-swap-day"
+      data-from="${fromDate}" data-to="${d}">
+      <span>Day ${days.indexOf(d) + 1} · ${fmtDate(d, { weekday: "short", month: "short", day: "numeric" })}</span>
+      <span class="swap-count">${n === 0 ? "empty" : n === 1 ? "1 activity" : n + " activities"}</span>
+    </button>`;
+  }).join("");
+  openModal(`
+    <h3>Swap ${fmtDate(fromDate, { weekday: "long", month: "long", day: "numeric" })} with…</h3>
+    <p class="swap-hint">The two days trade their full plans.</p>
+    ${rows}
+    <button class="btn secondary" type="button" data-action="close-modal">Cancel</button>`);
 }
 
 function openActivityForm(trip, activity, defaultDate) {
@@ -1293,6 +1329,18 @@ document.addEventListener("click", e => {
     case "add-activity":
       if (trip) openActivityForm(trip, null, el.dataset.date);
       break;
+    case "swap-day":
+      if (trip) openSwapDaySheet(trip, el.dataset.date);
+      break;
+    case "do-swap-day": {
+      if (!trip) break;
+      swapDays(trip, el.dataset.from, el.dataset.to);
+      closeModal();
+      const y = window.scrollY;
+      render();
+      window.scrollTo(0, y);
+      break;
+    }
     case "toggle-reorder": {
       state.reorderDate = state.reorderDate === el.dataset.date ? null : el.dataset.date;
       const y = window.scrollY;
