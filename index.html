@@ -1055,7 +1055,7 @@ document.addEventListener("submit", e => {
 });
 
 /* ================= Hold-to-drag reordering ================= */
-/* Long-press a card (~400ms without moving) to lift it, drag within its
+/* Long-press a card (~250ms without moving) to lift it, drag within its
    day, release to drop. A quick swipe scrolls as usual; the hold is
    cancelled if the finger wanders before the timer fires. */
 
@@ -1165,7 +1165,7 @@ $app.addEventListener("pointerdown", e => {
   drag.startX = e.clientX;
   drag.startY = e.clientY;
   drag.clientY = e.clientY;
-  drag.timer = setTimeout(startDrag, 400);
+  drag.timer = setTimeout(startDrag, 250);
 });
 
 document.addEventListener("pointermove", e => {
