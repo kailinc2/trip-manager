@@ -150,6 +150,16 @@
   }
   .move-btn:disabled { opacity: .3; }
 
+  /* ---------- Hold-to-drag reordering ---------- */
+  .activity { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  .drag-ghost {
+    position: fixed; z-index: 100; pointer-events: none;
+    margin: 0; opacity: .95;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+    transform: scale(1.02);
+  }
+  .drag-src { opacity: .35; }
+
   /* ---------- Activities ---------- */
   .activity {
     display: flex; gap: 12px; align-items: flex-start;
@@ -683,7 +693,9 @@ function daySectionHTML(trip, d, i) {
         <button class="mini-add" data-action="add-activity" data-date="${d}">+ Add</button>
       </span>
     </div>
-    ${acts.map((a, k) => activityCardHTML(trip, a, reordering, k === 0, k === acts.length - 1)).join("") || `<div class="day-empty">Nothing planned.</div>`}
+    <div class="day-cards" data-date="${d}">
+      ${acts.map((a, k) => activityCardHTML(trip, a, reordering, k === 0, k === acts.length - 1)).join("") || `<div class="day-empty">Nothing planned.</div>`}
+    </div>
     ${total ? `<div class="day-total">Day total: <b>${fmtMoney(total, trip.currency)}</b></div>` : ""}
     ${mapSectionHTML(acts, d)}
   </section>`;
@@ -762,7 +774,8 @@ function renderTrip() {
     if (dayActs.length === 0) {
       list = `<div class="empty"><span class="big">🗓️</span>Nothing planned for this day yet.</div>`;
     } else {
-      list = dayActs.map((a, i) => activityCardHTML(trip, a, reordering, i === 0, i === dayActs.length - 1)).join("");
+      const cards = dayActs.map((a, i) => activityCardHTML(trip, a, reordering, i === 0, i === dayActs.length - 1)).join("");
+      list = isRealDay ? `<div class="day-cards" data-date="${state.selectedDate}">${cards}</div>` : cards;
       const dayTotal = dayActs.reduce((s, a) => s + (a.cost || 0), 0);
       if (dayTotal) list += `<div class="day-total">Day total: <b>${fmtMoney(dayTotal, trip.currency)}</b></div>`;
     }
@@ -1041,9 +1054,143 @@ document.addEventListener("submit", e => {
   }
 });
 
+/* ================= Hold-to-drag reordering ================= */
+/* Long-press a card (~400ms without moving) to lift it, drag within its
+   day, release to drop. A quick swipe scrolls as usual; the hold is
+   cancelled if the finger wanders before the timer fires. */
+
+const drag = {
+  timer: null, active: false,
+  el: null, wrap: null, ghost: null,
+  startX: 0, startY: 0, liftY: 0, clientY: 0,
+};
+let suppressClick = false;
+
+function blockScrollWhileDragging(e) {
+  if (drag.active) e.preventDefault();
+}
+
+function cancelHold() {
+  clearTimeout(drag.timer);
+  drag.timer = null;
+  drag.el = null;
+  drag.wrap = null;
+}
+
+function startDrag() {
+  drag.timer = null;
+  if (!drag.el) return;
+  drag.active = true;
+  drag.liftY = drag.clientY;
+  const rect = drag.el.getBoundingClientRect();
+  const ghost = drag.el.cloneNode(true);
+  ghost.classList.add("drag-ghost");
+  ghost.style.width = rect.width + "px";
+  ghost.style.left = rect.left + "px";
+  ghost.style.top = rect.top + "px";
+  document.body.appendChild(ghost);
+  drag.ghost = ghost;
+  drag.el.classList.add("drag-src");
+  document.addEventListener("touchmove", blockScrollWhileDragging, { passive: false });
+  if (navigator.vibrate) navigator.vibrate(10);
+  requestAnimationFrame(autoScrollLoop);
+}
+
+// The dimmed source card doubles as the live drop preview: it is moved
+// within its day container as the pointer crosses card midpoints.
+function updateInsertion() {
+  const y = drag.clientY;
+  let before = null;
+  for (const c of drag.wrap.children) {
+    if (c === drag.el || !c.classList.contains("activity")) continue;
+    const r = c.getBoundingClientRect();
+    if (y < r.top + r.height / 2) { before = c; break; }
+  }
+  if (before) {
+    if (before.previousElementSibling !== drag.el) drag.wrap.insertBefore(drag.el, before);
+  } else if (drag.wrap.lastElementChild !== drag.el) {
+    drag.wrap.appendChild(drag.el);
+  }
+}
+
+// Keep scrolling when the finger is held near the top/bottom of the screen.
+function autoScrollLoop() {
+  if (!drag.active) return;
+  const margin = 100, y = drag.clientY;
+  if (y < margin) window.scrollBy(0, -Math.min(24, (margin - y) / 3));
+  else if (y > innerHeight - margin) window.scrollBy(0, Math.min(24, (y - (innerHeight - margin)) / 3));
+  updateInsertion();
+  requestAnimationFrame(autoScrollLoop);
+}
+
+function endDrag() {
+  if (drag.timer) { cancelHold(); return; } // released before the hold fired: normal tap
+  if (!drag.active) return;
+  drag.active = false;
+  document.removeEventListener("touchmove", blockScrollWhileDragging);
+  drag.ghost.remove();
+  drag.ghost = null;
+  drag.el.classList.remove("drag-src");
+
+  // Persist the day's DOM order as the manual order.
+  const trip = getTrip(state.tripId);
+  if (trip) {
+    const ids = [...drag.wrap.querySelectorAll(".activity")].map(el => el.dataset.id);
+    ids.forEach((id, i) => {
+      const a = trip.activities.find(x => x.id === id);
+      if (a) a.order = i;
+    });
+    save();
+  }
+  drag.el = null;
+  drag.wrap = null;
+
+  // The pointerup may still produce a click on the card — swallow it.
+  suppressClick = true;
+  setTimeout(() => { suppressClick = false; }, 350);
+
+  const y = window.scrollY;
+  render();
+  window.scrollTo(0, y);
+}
+
+$app.addEventListener("pointerdown", e => {
+  if (e.button !== 0) return;
+  if (e.target.closest("a,button")) return; // links/buttons keep their own gestures
+  const card = e.target.closest(".activity");
+  const wrap = card && card.parentElement;
+  if (!card || !wrap || !wrap.classList.contains("day-cards")) return;
+  drag.el = card;
+  drag.wrap = wrap;
+  drag.startX = e.clientX;
+  drag.startY = e.clientY;
+  drag.clientY = e.clientY;
+  drag.timer = setTimeout(startDrag, 400);
+});
+
+document.addEventListener("pointermove", e => {
+  drag.clientY = e.clientY;
+  if (drag.timer && !drag.active) {
+    // finger wandered before the hold fired: it's a scroll, not a drag
+    if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 8) cancelHold();
+  } else if (drag.active) {
+    drag.ghost.style.transform = `translateY(${e.clientY - drag.liftY}px) scale(1.02)`;
+    updateInsertion();
+  }
+});
+
+document.addEventListener("pointerup", endDrag);
+document.addEventListener("pointercancel", endDrag);
+$app.addEventListener("contextmenu", e => {
+  if (drag.active || drag.timer) e.preventDefault();
+});
+
 /* ================= Click handling ================= */
 
 document.addEventListener("click", e => {
+  // A click generated by the tail end of a drag is not a tap.
+  if (suppressClick) { suppressClick = false; return; }
+
   // Let real links (e.g. map links inside activity cards) navigate
   // without also triggering the card's action.
   if (e.target.closest("a[href]")) return;
