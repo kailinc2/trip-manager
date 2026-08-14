@@ -149,6 +149,12 @@
     font-size: 14px; cursor: pointer;
   }
   .move-btn:disabled { opacity: .3; }
+  .del-btn {
+    width: 42px; height: 34px; flex-shrink: 0;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg); color: var(--danger);
+    font-size: 14px; cursor: pointer; align-self: center;
+  }
 
   /* ---------- Hold-to-drag reordering ---------- */
   .activity { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
@@ -666,11 +672,14 @@ function activityCardHTML(trip, a, reorder, isFirst, isLast) {
          <button class="move-btn" data-action="move-act" data-id="${a.id}" data-dir="down" ${isLast ? "disabled" : ""}>▼</button>
        </div>`
     : (a.cost ? `<div class="act-cost">${fmtMoney(a.cost, trip.currency)}</div>` : "");
+  const lead = reorder
+    ? `<button class="del-btn" data-action="delete-activity" data-id="${a.id}">🗑</button>`
+    : `<div class="act-time">${a.startTime ? fmtTime(a.startTime) : "—"}
+        ${a.endTime ? `<span class="end">– ${fmtTime(a.endTime)}</span>` : ""}
+      </div>`;
   return `
   <div class="activity" data-action="edit-activity" data-id="${a.id}">
-    <div class="act-time">${a.startTime ? fmtTime(a.startTime) : "—"}
-      ${a.endTime ? `<span class="end">– ${fmtTime(a.endTime)}</span>` : ""}
-    </div>
+    ${lead}
     <div class="act-main">
       <p class="act-title">${esc(a.title)}</p>
       <div class="act-meta">${meta}</div>
@@ -689,7 +698,7 @@ function daySectionHTML(trip, d, i) {
     <div class="day-heading">
       <span>${fmtDate(d, { weekday: "long", month: "long", day: "numeric" })} · Day ${i + 1}</span>
       <span class="day-actions">
-        ${acts.length > 1 ? `<button class="mini-add" data-action="toggle-reorder" data-date="${d}">${reordering ? "✓ Done" : "≡ Reorder"}</button>` : ""}
+        ${acts.length ? `<button class="mini-add" data-action="toggle-reorder" data-date="${d}">${reordering ? "✓ Done" : "✎ Edit"}</button>` : ""}
         <button class="mini-add" data-action="add-activity" data-date="${d}">+ Add</button>
       </span>
     </div>
@@ -780,7 +789,7 @@ function renderTrip() {
       if (dayTotal) list += `<div class="day-total">Day total: <b>${fmtMoney(dayTotal, trip.currency)}</b></div>`;
     }
     itinerary = `<div class="day-heading"><span>${heading}</span>
-        ${isRealDay && dayActs.length > 1 ? `<button class="mini-add" data-action="toggle-reorder" data-date="${state.selectedDate}">${reordering ? "✓ Done" : "≡ Reorder"}</button>` : ""}
+        ${isRealDay && dayActs.length ? `<button class="mini-add" data-action="toggle-reorder" data-date="${state.selectedDate}">${reordering ? "✓ Done" : "✎ Edit"}</button>` : ""}
       </div>
       ${list}
       ${mapSectionHTML(dayActs, state.selectedDate)}
@@ -1301,8 +1310,9 @@ document.addEventListener("click", e => {
       const a = trip.activities.find(x => x.id === el.dataset.id);
       if (a && confirm(`Delete "${a.title}"?`)) {
         trip.activities = trip.activities.filter(x => x.id !== a.id);
+        const y = window.scrollY;
         save(); closeModal(); render();
-        if (state.selectedDate === "all") scrollToDay(a.date);
+        window.scrollTo(0, y);
       }
       break;
     }
