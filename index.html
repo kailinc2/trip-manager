@@ -842,11 +842,13 @@ function renderTrip() {
     ${content}`;
 
   // A fresh render resets the chip row's horizontal scroll to 0, which
-  // hides later days. Anchor the selected chip at the row's left edge.
+  // hides later days. Center the selected chip in the row (the browser
+  // clamps at both ends, so edge days sit as close to center as possible).
   const row = $app.querySelector(".day-chips");
   const sel = row && row.querySelector(".chip.selected");
   if (sel) {
-    row.scrollLeft += sel.getBoundingClientRect().left - row.getBoundingClientRect().left - 16;
+    const r = row.getBoundingClientRect(), c = sel.getBoundingClientRect();
+    row.scrollLeft += (c.left + c.width / 2) - (r.left + r.width / 2);
   }
 }
 
