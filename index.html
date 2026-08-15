@@ -840,6 +840,14 @@ function renderTrip() {
     <p class="trip-sub">${esc(trip.destination)} · ${fmtRange(trip.startDate, trip.endDate)}</p>
     ${tabs}
     ${content}`;
+
+  // A fresh render resets the chip row's horizontal scroll to 0, which
+  // hides later days. Anchor the selected chip at the row's left edge.
+  const row = $app.querySelector(".day-chips");
+  const sel = row && row.querySelector(".chip.selected");
+  if (sel) {
+    row.scrollLeft += sel.getBoundingClientRect().left - row.getBoundingClientRect().left - 16;
+  }
 }
 
 /* ----- Budget screen ----- */
