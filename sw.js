@@ -1,6 +1,6 @@
 // Service worker: app shell cached for offline use.
 // Bump the cache version when shipping changes to any cached asset.
-const CACHE = "trip-manager-v12";
+const CACHE = "trip-manager-v13";
 const ASSETS = [
   "./",
   "./index.html",
@@ -8,6 +8,9 @@ const ASSETS = [
   "./icon-192.png",
   "./icon-512.png",
   "./apple-touch-icon.png",
+  "./vendor/firebase-app.js",
+  "./vendor/firebase-auth.js",
+  "./vendor/firebase-firestore.js",
 ];
 
 self.addEventListener("install", e => {

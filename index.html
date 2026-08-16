@@ -515,6 +515,14 @@ async function shareTrip(trip) {
 }
 
 async function handleSharedLink() {
+  // Live shared-trip invite: #join=<firestore trip id>
+  const j = location.hash.match(/^#join=([A-Za-z0-9_-]{8,})$/);
+  if (j) {
+    history.replaceState(null, "", location.pathname + location.search);
+    joinSharedTrip(j[1]);
+    return;
+  }
+  // Value-copy link: #trip=<encoded trip json>
   const m = location.hash.match(/^#trip=(.+)$/);
   if (!m) return;
   // Clear the hash first so refresh/back doesn't re-prompt.
@@ -592,6 +600,7 @@ function renderTrips() {
           <span>${tripDays(t).length} days</span>
           <span>${t.activities.length} activities</span>
           ${total ? `<span>${fmtMoney(total, t.currency)}</span>` : ""}
+          ${t.shared ? `<span>☁️ ${Math.max(1, Object.keys(t.members || {}).length)} member${Object.keys(t.members || {}).length > 1 ? "s" : ""}</span>` : ""}
         </div>
       </div>`;
     }
@@ -622,8 +631,12 @@ function reorderDays(trip, newDateOrder) {
     if (oldDate !== days[k]) dest.set(oldDate, days[k]);
   });
   if (!dest.size) return;
+  const moved = [];
   for (const a of trip.activities) {
-    if (dest.has(a.date)) a.date = dest.get(a.date);
+    if (dest.has(a.date)) { a.date = dest.get(a.date); moved.push(a); }
+  }
+  if (trip.shared && moved.length) {
+    cloudCall(() => cloudBatchUpdate(trip.id, moved.map(a => ({ id: a.id, fields: { date: a.date } }))));
   }
   save();
 }
@@ -638,6 +651,9 @@ function moveActivity(trip, id, dir) {
   dayList.forEach((a, i) => { a.order = i; }); // freeze current visual order
   dayList[idx].order = target;
   dayList[target].order = idx;
+  if (trip.shared) {
+    cloudCall(() => cloudBatchUpdate(trip.id, dayList.map(a => ({ id: a.id, fields: { order: a.order } }))));
+  }
   save();
 }
 
@@ -977,10 +993,17 @@ function openTripForm(trip) {
       </div>
     </div>
     <button class="btn" type="submit">${isNew ? "Create Trip" : "Save Changes"}</button>
-    ${isNew ? "" : `<button class="btn secondary" type="button" data-action="share-trip" data-id="${t.id}">🔗 Share Link</button>
+    ${isNew ? "" : t.shared ? `
+    <button class="btn secondary" type="button" data-action="invite-trip" data-id="${t.id}">👥 Invite Link</button>
+    <button class="btn secondary" type="button" data-action="export-trip" data-id="${t.id}">⇪ Export as File</button>` : `
+    <button class="btn secondary" type="button" data-action="make-shared" data-id="${t.id}">☁️ Make Shared</button>
+    <button class="btn secondary" type="button" data-action="share-trip" data-id="${t.id}">🔗 Share Link</button>
     <button class="btn secondary" type="button" data-action="export-trip" data-id="${t.id}">⇪ Export as File</button>`}
     <button class="btn secondary" type="button" data-action="close-modal">Cancel</button>
-    ${isNew ? "" : `<button class="btn danger" type="button" data-action="delete-trip" data-id="${t.id}">Delete Trip</button>`}
+    ${isNew ? "" : t.shared ? `
+    <button class="btn danger" type="button" data-action="leave-trip" data-id="${t.id}">Leave Trip (this device)</button>
+    <button class="btn danger" type="button" data-action="delete-trip" data-id="${t.id}">Delete for Everyone</button>` : `
+    <button class="btn danger" type="button" data-action="delete-trip" data-id="${t.id}">Delete Trip</button>`}
   </form>`);
 }
 
@@ -1065,7 +1088,14 @@ document.addEventListener("submit", e => {
     };
     const existing = getTrip(form.dataset.id);
     if (existing) {
+      const changed = {};
+      for (const k of Object.keys(fields)) {
+        if (existing[k] !== fields[k]) changed[k] = fields[k];
+      }
       Object.assign(existing, fields);
+      if (existing.shared && Object.keys(changed).length) {
+        cloudCall(() => cloudUpdateTrip(existing.id, changed));
+      }
     } else {
       const trip = Object.assign({ id: uid(), activities: [] }, fields);
       db.trips.push(trip);
@@ -1092,16 +1122,273 @@ document.addEventListener("submit", e => {
     };
     const existing = trip.activities.find(a => a.id === form.dataset.id);
     if (existing) {
-      if (fields.date !== existing.date) existing.order = null; // moved days: rejoin by time
+      const changed = {};
+      for (const k of Object.keys(fields)) {
+        if (existing[k] !== fields[k]) changed[k] = fields[k];
+      }
+      if (fields.date !== existing.date) { existing.order = null; changed.order = null; } // moved days: rejoin by time
       Object.assign(existing, fields);
+      if (trip.shared && Object.keys(changed).length) {
+        cloudCall(() => cloudUpdateActivity(trip.id, existing.id, changed));
+      }
     } else {
-      trip.activities.push(Object.assign({ id: uid() }, fields));
+      const act = Object.assign({ id: uid() }, fields);
+      trip.activities.push(act);
+      if (trip.shared) cloudCall(() => cloudSetActivity(trip.id, act));
     }
     if (state.selectedDate !== "all" && tripDays(trip).includes(fields.date)) state.selectedDate = fields.date;
     save(); closeModal(); render();
     if (state.selectedDate === "all") scrollToDay(fields.date);
   }
 });
+
+/* ================= Cloud sync (shared trips) ================= */
+/* A shared trip lives in Firestore: trips/{id} holds the metadata and
+   trips/{id}/activities/{actId} one document per activity, so friends
+   editing different activities never conflict. The trip's random ID is
+   the capability — the invite link is #join=<id>. The localStorage copy
+   acts as the offline cache; snapshots keep it fresh. */
+
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCWwqWeS8PKUCeIgBYEXnusdCU1TvYCCCk",
+  authDomain: "trip-manager-50d33.firebaseapp.com",
+  projectId: "trip-manager-50d33",
+  storageBucket: "trip-manager-50d33.firebasestorage.app",
+  messagingSenderId: "266611855715",
+  appId: "1:266611855715:web:3e4fc8569287b5dfcac356",
+};
+
+let cloud = null; // { fs, db, uid } once initialized
+
+// Lazy: Firebase loads and signs in (anonymously) only when a sharing
+// feature is first used, so purely local usage makes no network calls.
+async function cloudInit() {
+  if (cloud) return cloud;
+  const [appM, authM, fs] = await Promise.all([
+    import("./vendor/firebase-app.js"),
+    import("./vendor/firebase-auth.js"),
+    import("./vendor/firebase-firestore.js"),
+  ]);
+  const app = appM.initializeApp(FIREBASE_CONFIG);
+  const db = fs.initializeFirestore(app, {
+    localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() }),
+  });
+  const auth = authM.getAuth(app);
+  // Reuse the persisted anonymous user (works offline); first-ever
+  // sign-in needs the network.
+  const existing = await new Promise(res => {
+    const off = authM.onAuthStateChanged(auth, u => { off(); res(u); });
+  });
+  const uid = existing ? existing.uid : (await authM.signInAnonymously(auth)).user.uid;
+  cloud = { fs, db, uid };
+  return cloud;
+}
+
+// Fire-and-forget cloud write. Firestore queues writes made offline, so
+// a rejection here is a real problem (rules, deleted doc) worth surfacing.
+function cloudCall(fn) {
+  fn().catch(err => {
+    console.error(err);
+    alert("Sync failed: " + err.message);
+  });
+}
+
+function tripMetaDoc(trip) {
+  return {
+    name: trip.name, destination: trip.destination,
+    startDate: trip.startDate, endDate: trip.endDate,
+    currency: trip.currency, budget: trip.budget || null,
+    members: trip.members || {},
+  };
+}
+
+function activityDoc(a) {
+  return {
+    title: a.title, date: a.date, startTime: a.startTime, endTime: a.endTime,
+    category: a.category, location: a.location,
+    cost: a.cost === undefined ? null : a.cost,
+    order: a.order === undefined ? null : a.order,
+    notes: a.notes,
+  };
+}
+
+async function cloudMakeShared(trip, myName) {
+  const c = await cloudInit();
+  const ref = c.fs.doc(c.fs.collection(c.db, "trips"));
+  trip.members = {};
+  trip.members[c.uid] = myName;
+  const batch = c.fs.writeBatch(c.db);
+  batch.set(ref, tripMetaDoc(trip));
+  for (const a of trip.activities) {
+    batch.set(c.fs.doc(c.db, "trips", ref.id, "activities", a.id), activityDoc(a));
+  }
+  await batch.commit();
+  return ref.id;
+}
+
+async function cloudUpdateTrip(tripId, fields) {
+  const c = await cloudInit();
+  await c.fs.updateDoc(c.fs.doc(c.db, "trips", tripId), fields);
+}
+
+async function cloudSetActivity(tripId, act) {
+  const c = await cloudInit();
+  await c.fs.setDoc(c.fs.doc(c.db, "trips", tripId, "activities", act.id), activityDoc(act));
+}
+
+async function cloudUpdateActivity(tripId, actId, fields) {
+  const c = await cloudInit();
+  await c.fs.updateDoc(c.fs.doc(c.db, "trips", tripId, "activities", actId), fields);
+}
+
+async function cloudDeleteActivity(tripId, actId) {
+  const c = await cloudInit();
+  await c.fs.deleteDoc(c.fs.doc(c.db, "trips", tripId, "activities", actId));
+}
+
+async function cloudBatchUpdate(tripId, updates) {
+  const c = await cloudInit();
+  const batch = c.fs.writeBatch(c.db);
+  for (const u of updates) {
+    batch.update(c.fs.doc(c.db, "trips", tripId, "activities", u.id), u.fields);
+  }
+  await batch.commit();
+}
+
+async function cloudDeleteTrip(tripId) {
+  const c = await cloudInit();
+  const snap = await c.fs.getDocs(c.fs.collection(c.db, "trips", tripId, "activities"));
+  const batch = c.fs.writeBatch(c.db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  batch.delete(c.fs.doc(c.db, "trips", tripId));
+  await batch.commit();
+}
+
+/* ----- live listener for the currently open shared trip ----- */
+
+let unsubTrip = null;
+
+function detachTripListener() {
+  if (unsubTrip) { unsubTrip(); unsubTrip = null; }
+}
+
+async function attachTripListener(tripId) {
+  detachTripListener();
+  let c;
+  try { c = await cloudInit(); }
+  catch (err) { console.error(err); return; } // offline before first sign-in
+  if (state.tripId !== tripId) return;        // user navigated away meanwhile
+  let meta = null, acts = null;
+  const apply = () => {
+    if (!meta || !acts) return;
+    let fresh;
+    try {
+      fresh = sanitizeTrip(Object.assign({}, meta, { id: tripId, activities: acts }));
+    } catch (e) { return; }
+    fresh.shared = true;
+    fresh.members = meta.members || {};
+    const idx = db.trips.findIndex(t => t.id === tripId);
+    if (idx >= 0) db.trips[idx] = fresh; else db.trips.push(fresh);
+    save();
+    if (drag.active || chipDrag.active) return; // don't yank the DOM mid-drag
+    if (state.view === "trip" && state.tripId === tripId) {
+      const y = window.scrollY;
+      render();
+      window.scrollTo(0, y);
+    } else if (state.view === "trips") {
+      render();
+    }
+  };
+  const offMeta = c.fs.onSnapshot(c.fs.doc(c.db, "trips", tripId), snap => {
+    if (!snap.exists()) {
+      // Deleted by another member.
+      detachTripListener();
+      const idx = db.trips.findIndex(t => t.id === tripId);
+      if (idx >= 0) {
+        const name = db.trips[idx].name;
+        db.trips.splice(idx, 1);
+        save();
+        if (state.tripId === tripId) { state.view = "trips"; state.tripId = null; }
+        render();
+        alert(`Shared trip "${name}" was deleted by a member.`);
+      }
+      return;
+    }
+    meta = snap.data();
+    apply();
+  }, err => console.error("trip listener:", err));
+  const offActs = c.fs.onSnapshot(c.fs.collection(c.db, "trips", tripId, "activities"), snap => {
+    acts = snap.docs.map(d => Object.assign({ id: d.id }, d.data()));
+    apply();
+  }, err => console.error("activities listener:", err));
+  unsubTrip = () => { offMeta(); offActs(); };
+}
+
+/* ----- share / join flows ----- */
+
+async function makeSharedFlow(trip) {
+  const name = (prompt("Your name (shown to trip members):", "") || "").trim().slice(0, 30) || "Someone";
+  try {
+    const remoteId = await cloudMakeShared(trip, name);
+    // The trip's identity becomes its cloud ID.
+    if (state.tripId === trip.id) state.tripId = remoteId;
+    trip.id = remoteId;
+    trip.shared = true;
+    save();
+    render();
+    if (state.view === "trip" && state.tripId === remoteId) attachTripListener(remoteId);
+    inviteTrip(trip);
+  } catch (err) {
+    alert("Couldn't share the trip: " + err.message);
+  }
+}
+
+async function inviteTrip(trip) {
+  const url = location.origin + location.pathname + "#join=" + trip.id;
+  if (navigator.share) {
+    try { await navigator.share({ title: trip.name, url }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    alert("Invite link copied to clipboard.");
+  } catch (e) {
+    prompt("Copy this invite link:", url);
+  }
+}
+
+async function joinSharedTrip(tripId) {
+  try {
+    const c = await cloudInit();
+    if (!getTrip(tripId)) {
+      const snap = await c.fs.getDoc(c.fs.doc(c.db, "trips", tripId));
+      if (!snap.exists()) throw new Error("trip not found — the link may be stale");
+      const meta = snap.data();
+      if (!confirm(`Join shared trip "${meta.name}"?`)) return;
+      const name = (prompt("Your name (shown to trip members):", "") || "").trim().slice(0, 30);
+      const t = sanitizeTrip(Object.assign({}, meta, { id: tripId, activities: [] }));
+      t.shared = true;
+      t.members = meta.members || {};
+      if (name) {
+        t.members[c.uid] = name;
+        const f = {};
+        f["members." + c.uid] = name;
+        cloudCall(() => cloudUpdateTrip(tripId, f));
+      }
+      db.trips.push(t);
+      save();
+    }
+    state.view = "trip";
+    state.tripId = tripId;
+    state.selectedDate = null;
+    state.tab = "itinerary";
+    state.reorderDate = null;
+    render();
+    attachTripListener(tripId);
+  } catch (err) {
+    alert("Couldn't join the trip: " + err.message);
+  }
+}
 
 /* ================= Hold-to-drag reordering ================= */
 /* Long-press a card (~250ms without moving) to lift it, drag within its
@@ -1189,6 +1476,9 @@ function endDrag() {
       const a = trip.activities.find(x => x.id === id);
       if (a) a.order = i;
     });
+    if (trip.shared) {
+      cloudCall(() => cloudBatchUpdate(trip.id, ids.map((id, i) => ({ id, fields: { order: i } }))));
+    }
     save();
   }
   drag.el = null;
@@ -1378,14 +1668,18 @@ document.addEventListener("click", e => {
     case "new-trip":
       openTripForm(null);
       break;
-    case "open-trip":
+    case "open-trip": {
       state.view = "trip";
       state.tripId = el.dataset.id;
       state.selectedDate = null;
       state.tab = "itinerary";
       state.reorderDate = null;
+      const opened = getTrip(state.tripId);
+      if (opened && opened.shared) attachTripListener(opened.id);
+      else detachTripListener();
       render();
       break;
+    }
     case "set-tab":
       state.tab = el.dataset.tab;
       render();
@@ -1395,17 +1689,42 @@ document.addEventListener("click", e => {
       break;
     case "delete-trip": {
       const t = getTrip(el.dataset.id);
-      if (t && confirm(`Delete "${t.name}" and all its activities?`)) {
+      const msg = t && (t.shared
+        ? `Delete "${t.name}" for EVERYONE? All members lose it. To only remove it from this device, use "Leave Trip" instead.`
+        : `Delete "${t.name}" and all its activities?`);
+      if (t && confirm(msg)) {
+        if (t.shared) { detachTripListener(); cloudCall(() => cloudDeleteTrip(t.id)); }
         db.trips = db.trips.filter(x => x.id !== t.id);
         state.view = "trips";
         save(); closeModal(); render();
       }
       break;
     }
+    case "leave-trip": {
+      const t = getTrip(el.dataset.id);
+      if (t && confirm(`Remove "${t.name}" from this device? Other members keep it, and you can rejoin later with an invite link.`)) {
+        detachTripListener();
+        db.trips = db.trips.filter(x => x.id !== t.id);
+        state.view = "trips";
+        save(); closeModal(); render();
+      }
+      break;
+    }
+    case "make-shared": {
+      const t = getTrip(el.dataset.id);
+      if (t) { closeModal(); makeSharedFlow(t); }
+      break;
+    }
+    case "invite-trip": {
+      const t = getTrip(el.dataset.id);
+      if (t) inviteTrip(t);
+      break;
+    }
     case "back":
       state.view = "trips";
       state.tripId = null;
       state.reorderDate = null;
+      detachTripListener();
       render();
       break;
     case "select-day": {
@@ -1473,6 +1792,7 @@ document.addEventListener("click", e => {
       const a = trip.activities.find(x => x.id === el.dataset.id);
       if (a && confirm(`Delete "${a.title}"?`)) {
         trip.activities = trip.activities.filter(x => x.id !== a.id);
+        if (trip.shared) cloudCall(() => cloudDeleteActivity(trip.id, a.id));
         const y = window.scrollY;
         save(); closeModal(); render();
         window.scrollTo(0, y);

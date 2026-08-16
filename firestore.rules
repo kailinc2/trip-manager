@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // The post-write document must look like a trip. Mirrors the app's
+    // client-side sanitizeTrip so a buggy/malicious client can't write junk.
+    function validTrip() {
+      let d = request.resource.data;
+      return d.name is string && d.name.size() > 0 && d.name.size() <= 80
+        && d.destination is string && d.destination.size() <= 80
+        && d.startDate is string && d.startDate.matches('\\d{4}-\\d{2}-\\d{2}')
+        && d.endDate is string && d.endDate.matches('\\d{4}-\\d{2}-\\d{2}')
+        && d.currency is string && d.currency.size() > 0 && d.currency.size() <= 5
+        && (!('budget' in d) || d.budget == null || (d.budget is number && d.budget >= 0))
+        && (!('members' in d) || d.members is map);
+    }
+
+    function validActivity() {
+      let d = request.resource.data;
+      return d.title is string && d.title.size() > 0 && d.title.size() <= 120
+        && d.date is string && d.date.matches('\\d{4}-\\d{2}-\\d{2}')
+        && (!('startTime' in d) || (d.startTime is string && d.startTime.size() <= 5))
+        && (!('endTime' in d) || (d.endTime is string && d.endTime.size() <= 5))
+        && (!('category' in d) || (d.category is string && d.category.size() <= 20))
+        && (!('location' in d) || (d.location is string && d.location.size() <= 160))
+        && (!('notes' in d) || (d.notes is string && d.notes.size() <= 1000))
+        && (!('cost' in d) || d.cost == null || (d.cost is number && d.cost >= 0))
+        && (!('order' in d) || d.order == null || d.order is number);
+    }
+
+    match /trips/{tripId} {
+      // Knowing the random 20-char trip ID is the capability to access it.
+      // Listing the collection is never allowed, so IDs can't be discovered.
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn() && validTrip();
+      allow delete: if signedIn();
+
+      match /activities/{activityId} {
+        // list here is scoped to one trip, which requires knowing its ID.
+        allow get, list: if signedIn();
+        allow create, update: if signedIn() && validActivity();
+        allow delete: if signedIn();
+      }
+    }
+  }
+}
