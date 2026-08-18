@@ -158,6 +158,35 @@
   }
   .chip { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 
+  /* ---------- Unified map tab ---------- */
+  #trip-map {
+    height: 56vh;
+    border-radius: var(--radius); border: 1px solid var(--border);
+    z-index: 0; background: var(--surface);
+  }
+  .map-status { text-align: center; color: var(--text-dim); font-size: 13px; margin: 10px 0 2px; }
+  .map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 2px; }
+  .legend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim); }
+  .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+  .map-pin {
+    width: 26px; height: 26px; border-radius: 50%; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 12px; font-weight: 700;
+    border: 2px solid rgba(255, 255, 255, .92);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .4);
+  }
+  .map-unlocated { font-size: 13px; color: var(--text-dim); margin: 6px 2px 16px; overflow-wrap: break-word; }
+  .member-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0; }
+  .member-chip {
+    background: var(--accent-soft); color: var(--text);
+    border-radius: 999px; padding: 5px 12px; font-size: 13px; font-weight: 500;
+  }
+  @media (prefers-color-scheme: dark) {
+    .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--text); }
+    .leaflet-popup-content a { color: var(--accent); }
+    .leaflet-container { background: #262b33; }
+  }
+
   /* ---------- Hold-to-drag reordering ---------- */
   .activity { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
   .drag-ghost {
@@ -421,6 +450,18 @@ function exportTrip(trip) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// Cached geocode result riding on an activity: {q, lat, lng} for a hit,
+// {q, ok:false} for a definitive miss. q is the location string it was
+// computed from, so edits invalidate the cache.
+function sanitizeGeo(g) {
+  if (!g || typeof g !== "object" || typeof g.q !== "string") return null;
+  if (typeof g.lat === "number" && isFinite(g.lat) && typeof g.lng === "number" && isFinite(g.lng)) {
+    return { q: g.q.slice(0, 160), lat: g.lat, lng: g.lng };
+  }
+  if (g.ok === false) return { q: g.q.slice(0, 160), ok: false };
+  return null;
+}
+
 // Validate and normalize an imported trip. Throws with a readable
 // message on anything that doesn't look like a trip; silently drops
 // malformed activities and unknown fields.
@@ -456,6 +497,7 @@ function sanitizeTrip(raw) {
       location: typeof a.location === "string" ? a.location.trim().slice(0, 160) : "",
       cost: (typeof a.cost === "number" && isFinite(a.cost) && a.cost >= 0) ? a.cost : null,
       order: (typeof a.order === "number" && isFinite(a.order)) ? a.order : null,
+      geo: sanitizeGeo(a.geo),
       notes: typeof a.notes === "string" ? a.notes.trim().slice(0, 1000) : "",
     });
   }
@@ -842,20 +884,27 @@ function renderTrip() {
       <button class="btn" data-action="add-activity">+ Add Activity</button>`;
   }
 
+  // Map tab disabled for now. To restore the unified map view, put this
+  // button back in the tabs row below and re-enable the two "map" lines
+  // in the content expression and after the innerHTML assignment:
+  //   <button class="${state.tab === "map" ? "selected" : ""}" data-action="set-tab" data-tab="map">Map</button>
   const tabs = `
     <div class="tabs">
-      <button class="${state.tab === "budget" ? "" : "selected"}" data-action="set-tab" data-tab="itinerary">Itinerary</button>
+      <button class="${state.tab === "budget" || state.tab === "map" ? "" : "selected"}" data-action="set-tab" data-tab="itinerary">Itinerary</button>
       <button class="${state.tab === "budget" ? "selected" : ""}" data-action="set-tab" data-tab="budget">Budget</button>
     </div>`;
 
   const content = state.tab === "budget"
     ? renderBudgetHTML(trip)
+    // : state.tab === "map" ? renderMapTabHTML()
     : `<div class="day-chips">${chips}</div>${itinerary}`;
 
   $app.innerHTML = `
     <p class="trip-sub">${esc(trip.destination)} · ${fmtRange(trip.startDate, trip.endDate)}</p>
     ${tabs}
     ${content}`;
+
+  // if (state.tab === "map") initTripMap(trip.id);
 
   // A fresh render resets the chip row's horizontal scroll to 0, which
   // hides later days. Center the selected chip in the row (the browser
@@ -958,6 +1007,13 @@ function closeModal() {
   $modal.innerHTML = "";
 }
 
+function memberChipsHTML(trip) {
+  const me = cloud && cloud.uid;
+  const chips = Object.entries(trip.members || {}).map(([mUid, name]) =>
+    `<span class="member-chip">${esc(name || "Unnamed")}${mUid === me ? " (you)" : ""}</span>`);
+  return chips.length ? chips.join("") : `<span class="member-chip">No named members yet</span>`;
+}
+
 function openTripForm(trip) {
   const isNew = !trip;
   const t = trip || { name: "", destination: "", startDate: "", endDate: "", currency: "$" };
@@ -992,6 +1048,11 @@ function openTripForm(trip) {
         <input name="budget" type="number" min="0" step="0.01" inputmode="decimal" placeholder="e.g. 2000" value="${t.budget || ""}">
       </div>
     </div>
+    ${!isNew && t.shared ? `
+    <div class="field">
+      <label>Members (${Object.keys(t.members || {}).length})</label>
+      <div class="member-list">${memberChipsHTML(t)}</div>
+    </div>` : ""}
     <button class="btn" type="submit">${isNew ? "Create Trip" : "Save Changes"}</button>
     ${isNew ? "" : t.shared ? `
     <button class="btn secondary" type="button" data-action="invite-trip" data-id="${t.id}">👥 Invite Link</button>
@@ -1208,6 +1269,7 @@ function activityDoc(a) {
     category: a.category, location: a.location,
     cost: a.cost === undefined ? null : a.cost,
     order: a.order === undefined ? null : a.order,
+    geo: a.geo || null,
     notes: a.notes,
   };
 }
@@ -1365,16 +1427,14 @@ async function joinSharedTrip(tripId) {
       if (!snap.exists()) throw new Error("trip not found — the link may be stale");
       const meta = snap.data();
       if (!confirm(`Join shared trip "${meta.name}"?`)) return;
-      const name = (prompt("Your name (shown to trip members):", "") || "").trim().slice(0, 30);
+      const name = (prompt("Your name (shown to trip members):", "") || "").trim().slice(0, 30) || "Someone";
       const t = sanitizeTrip(Object.assign({}, meta, { id: tripId, activities: [] }));
       t.shared = true;
       t.members = meta.members || {};
-      if (name) {
-        t.members[c.uid] = name;
-        const f = {};
-        f["members." + c.uid] = name;
-        cloudCall(() => cloudUpdateTrip(tripId, f));
-      }
+      t.members[c.uid] = name;
+      const f = {};
+      f["members." + c.uid] = name;
+      cloudCall(() => cloudUpdateTrip(tripId, f));
       db.trips.push(t);
       save();
     }
@@ -1387,6 +1447,169 @@ async function joinSharedTrip(tripId) {
     attachTripListener(tripId);
   } catch (err) {
     alert("Couldn't join the trip: " + err.message);
+  }
+}
+
+/* ================= Unified map tab (currently disabled) ================= */
+/* The Map tab button is commented out in renderTrip — this code is kept
+   ready to re-enable. All located activities on one Leaflet/OSM map:
+   pins colored by day and numbered in visit order. Free-text locations
+   are geocoded once via OSM's Nominatim (1 req/sec per its usage policy)
+   and the coordinates cached on the activity, so they sync and export. */
+
+const DAY_COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed",
+                    "#0891b2", "#db2777", "#65a30d", "#92400e", "#475569"];
+
+let leafletReady = null;
+function loadLeaflet() {
+  if (leafletReady) return leafletReady;
+  leafletReady = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "./vendor/leaflet.css";
+    document.head.appendChild(css);
+    const s = document.createElement("script");
+    s.src = "./vendor/leaflet.js";
+    s.onload = () => resolve(window.L);
+    s.onerror = () => { leafletReady = null; reject(new Error("map library failed to load")); };
+    document.head.appendChild(s);
+  });
+  return leafletReady;
+}
+
+function renderMapTabHTML() {
+  return `
+    <div id="trip-map"></div>
+    <div class="map-status" id="map-status">Loading map…</div>
+    <div class="map-legend" id="map-legend"></div>
+    <div class="map-unlocated" id="map-unlocated"></div>`;
+}
+
+// Geocode every located-but-uncached activity, one per second. Results
+// (including definitive "not found") are cached on the activity; network
+// errors are not cached so they retry next time the tab opens.
+async function ensureGeocodes(tripId) {
+  const pending = () => {
+    const t = getTrip(tripId);
+    return t ? t.activities.filter(a => a.location && (!a.geo || a.geo.q !== a.location)) : [];
+  };
+  const total = pending().length;
+  let done = 0;
+  while (state.tab === "map" && state.tripId === tripId) {
+    const list = pending();
+    if (!list.length) return;
+    const a = list[0];
+    const s = document.getElementById("map-status");
+    if (s) s.textContent = `Locating places… ${done + 1}/${total}`;
+    let geo;
+    try {
+      const res = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(a.location));
+      if (!res.ok) throw new Error("geocoder error " + res.status);
+      const arr = await res.json();
+      geo = arr.length
+        ? { q: a.location, lat: parseFloat(arr[0].lat), lng: parseFloat(arr[0].lon) }
+        : { q: a.location, ok: false };
+    } catch (e) {
+      return; // offline or geocoder down — leave uncached, retry later
+    }
+    const t = getTrip(tripId);
+    const act = t && t.activities.find(x => x.id === a.id);
+    if (act && act.location === geo.q) {
+      act.geo = geo;
+      save();
+      if (t.shared) cloudCall(() => cloudUpdateActivity(t.id, act.id, { geo }));
+    }
+    done++;
+    if (pending().length) await new Promise(r => setTimeout(r, 1100));
+  }
+}
+
+let leafletMap = null;
+let mapView = null;       // remembered center/zoom so re-renders don't reset it
+let mapViewTripId = null;
+
+async function initTripMap(tripId) {
+  try {
+    const L = await loadLeaflet();
+    await ensureGeocodes(tripId);
+    const trip = getTrip(tripId);
+    if (!trip || state.view !== "trip" || state.tripId !== tripId || state.tab !== "map") return;
+    const el = document.getElementById("trip-map");
+    if (!el) return;
+    if (leafletMap) { leafletMap.remove(); leafletMap = null; }
+    if (mapViewTripId !== tripId) { mapView = null; mapViewTripId = tripId; }
+
+    const days = tripDays(trip);
+    const located = [], failed = [], noLocation = [];
+    for (const a of trip.activities) {
+      if (!a.location) { noLocation.push(a); continue; }
+      if (a.geo && typeof a.geo.lat === "number" && a.geo.q === a.location) located.push(a);
+      else failed.push(a);
+    }
+
+    const map = L.map(el, { zoomControl: true });
+    leafletMap = map;
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · Nominatim',
+    }).addTo(map);
+
+    const seen = new Map(); // nudge identical coordinates apart so all pins stay tappable
+    const bounds = [];
+    const usedDays = new Set();
+    for (const a of located) {
+      const di = days.indexOf(a.date);
+      const color = di >= 0 ? DAY_COLORS[di % DAY_COLORS.length] : "#6b7280";
+      usedDays.add(di);
+      const dayLocated = trip.activities
+        .filter(x => x.date === a.date && x.location && x.geo && typeof x.geo.lat === "number")
+        .sort(byDayOrder);
+      const n = dayLocated.indexOf(a) + 1;
+      const key = a.geo.lat.toFixed(5) + "," + a.geo.lng.toFixed(5);
+      const dup = seen.get(key) || 0;
+      seen.set(key, dup + 1);
+      const lat = a.geo.lat + dup * 0.00018;
+      const lng = a.geo.lng + dup * 0.00018;
+      const icon = L.divIcon({
+        className: "",
+        html: `<div class="map-pin" style="background:${color}">${n}</div>`,
+        iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -14],
+      });
+      const when = di >= 0
+        ? `Day ${di + 1} · ${fmtDate(a.date, { weekday: "short", month: "short", day: "numeric" })}`
+        : "Outside trip dates";
+      const time = a.startTime ? " · " + fmtTime(a.startTime) : "";
+      L.marker([lat, lng], { icon }).addTo(map).bindPopup(
+        `<b>${esc(a.title)}</b><br>${when}${time}<br>` +
+        `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(a.location)}" target="_blank" rel="noopener">Open in Google Maps</a>`);
+      bounds.push([lat, lng]);
+    }
+
+    if (mapView) map.setView(mapView.center, mapView.zoom);
+    else if (bounds.length) map.fitBounds(bounds, { padding: [36, 36] });
+    else map.setView([20, 0], 2);
+    map.on("moveend", () => { mapView = { center: map.getCenter(), zoom: map.getZoom() }; });
+
+    const legendEl = document.getElementById("map-legend");
+    if (legendEl) {
+      legendEl.innerHTML = [...usedDays].sort((x, y) => x - y).map(di => di < 0
+        ? `<span class="legend-item"><span class="legend-dot" style="background:#6b7280"></span>Other</span>`
+        : `<span class="legend-item"><span class="legend-dot" style="background:${DAY_COLORS[di % DAY_COLORS.length]}"></span>Day ${di + 1}</span>`
+      ).join("");
+    }
+
+    const s = document.getElementById("map-status");
+    if (s) s.textContent = located.length ? "" : "No mappable places yet — add locations to activities.";
+    const un = document.getElementById("map-unlocated");
+    if (un) {
+      const bits = [];
+      if (failed.length) bits.push("Couldn't locate: " + failed.map(a => esc(a.title)).join(", ") + ". Try a more specific location on those activities.");
+      if (noLocation.length) bits.push(noLocation.length + (noLocation.length === 1 ? " activity has" : " activities have") + " no location.");
+      un.innerHTML = bits.join("<br>");
+    }
+  } catch (err) {
+    const s = document.getElementById("map-status");
+    if (s) s.textContent = "Map unavailable: " + err.message;
   }
 }
 
